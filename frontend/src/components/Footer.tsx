@@ -38,7 +38,7 @@ export function Footer() {
         </div>
       </div>
       <div className="border-t border-white/10 py-5 text-center text-xs text-[#a39d94]">
-        © 2026 LAMIMI_ID — Belajar bahasa dunia, dari rak digital kami.
+        © 2026 LAMIMI_ID — Learn All Languages in Minimal Time and Money. All rights reserved.
       </div>
     </footer>
   );

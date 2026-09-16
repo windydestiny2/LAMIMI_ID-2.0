@@ -14,6 +14,7 @@ from typing import List, Optional
 from urllib.parse import quote
 
 import bcrypt
+import httpx
 import jwt
 import pytesseract
 from PIL import Image
@@ -29,6 +30,9 @@ load_dotenv(ROOT_DIR / '.env')
 from lib.db import client, db, ensure_indexes
 
 logger = logging.getLogger(__name__)
+RAJA_DESTINATION_CACHE: dict[str, tuple[float, dict]] = {}
+RAJA_ORIGIN_CACHE: tuple[float, str] | None = None
+RAJA_DAILY_LIMIT_UNTIL = 0.0
 JWT_ALGORITHM = "HS256"
 ORDER_STATUSES = ["menunggu_pembayaran", "menunggu_verifikasi", "lunas", "diproses", "dikirim", "selesai", "dibatalkan"]
 PAID_STATUSES = ["menunggu_verifikasi", "lunas", "diproses", "dikirim", "selesai"]
@@ -40,6 +44,10 @@ def normalize_stock(stock: int) -> int:
     if stock == -1:
         return -1
     return max(stock, 0)
+
+
+def calculate_billable_weight_kg(total_weight_grams: int) -> int:
+    return max(1, math.ceil((max(0, total_weight_grams) - 300) / 1000))
 
 
 def jwt_secret() -> str:
@@ -297,6 +305,7 @@ class Book(BaseModel):
     variant_groups: List[VariantGroup] = []
     variants: List[Variant] = []
     stock: int = -1  # -1 = unlimited (default untuk ebook)
+    weight_grams: int = 0  # only used for physical books
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
@@ -317,6 +326,7 @@ class BookInput(BaseModel):
     variant_groups: List[VariantGroup] = []
     variants: List[Variant] = []
     stock: int = -1
+    weight_grams: int = 0
 
 
 class ShippingRegion(BaseModel):
@@ -330,6 +340,25 @@ class ShippingInput(BaseModel):
     name: str
     cost: int
     eta: str = ""
+
+
+class ShippingQuoteInput(BaseModel):
+    city: str
+    province: str = ""
+    weight_grams: int = Field(default=0, ge=0)
+    items: List[dict] = []
+    courier: str = "jne"
+
+
+class ShippingQuote(BaseModel):
+    available: bool = False
+    cost: int = 0
+    service: str = ""
+    etd: str = ""
+    source: str = "fallback"
+    message: str = ""
+    total_weight_grams: int = 0
+    billable_weight_kg: int = 0
 
 
 class PaymentMethod(BaseModel):
@@ -416,6 +445,7 @@ class OrderItem(BaseModel):
     qty: int = 1
     variant_id: str = ""
     variant_label: str = ""
+    weight_grams: int = 0
 
 
 class OrderItemInput(BaseModel):
@@ -439,6 +469,8 @@ class Order(BaseModel):
     region: str = ""
     notes: str = ""
     shipping_cost: int = 0
+    total_weight_grams: int = 0
+    billable_weight_kg: int = 0
     subtotal: int = 0
     discount_amount: int = 0
     total: int = 0
@@ -519,6 +551,8 @@ def build_wa_url(order: Order) -> str:
             f"*Item:*\n{items_txt}\n"
             f"*Alamat Kirim (JNE):* {order.address}, {order.city}, {order.province} {order.postal_code}\n"
             f"*Wilayah:* {order.region} — Ongkir JNE {rupiah(order.shipping_cost)}\n"
+            f"*Berat:* {order.total_weight_grams:,} gram (ditagihkan {order.billable_weight_kg} kg)\n"
+            f"*Catatan patokan:* {order.notes or '-'}\n"
             f"*Subtotal:* {rupiah(order.subtotal)}\n"
             f"*Total Bayar:* {rupiah(order.total)}\n"
             f"{pay_line}\n\n"
@@ -698,6 +732,196 @@ async def list_shipping():
     return [ShippingRegion(**d) for d in docs]
 
 
+def normalize_city_name(value: str) -> str:
+    return re.sub(r"^(kabupaten|kab\.?|kota)\s+", "", value.strip().lower())
+
+
+def city_matches(row: dict, requested: str) -> bool:
+    requested_text = requested.strip().lower()
+    requested_type = ""
+    if requested_text.startswith(("kabupaten ", "kab. ")):
+        requested_type = "kabupaten"
+    elif requested_text.startswith("kota "):
+        requested_type = "kota"
+    if requested_type and row.get("type", "").lower() != requested_type:
+        return False
+    return normalize_city_name(row.get("city_name", "")) == normalize_city_name(requested)
+
+
+def find_city_row(rows: list[dict], city: str, province: str = "") -> Optional[dict]:
+    direct = next((row for row in rows if city_matches(row, city)), None)
+    if direct:
+        return direct
+    if city.strip().lower() == "cibinong" and "bogor" in province.lower():
+        return next((row for row in rows if city_matches(row, "Kabupaten Bogor")), None)
+    return None
+
+
+def find_destination_row(rows: list[dict], requested: str, province: str = "") -> Optional[dict]:
+    requested_text = requested.strip().lower()
+    province_text = province.strip().lower()
+    for row in rows:
+        haystack = " ".join(str(row.get(key, "")) for key in ("label", "city_name", "district_name", "subdistrict_name")).lower()
+        if requested_text not in haystack:
+            continue
+        if province_text and province_text not in str(row.get("province_name", "")).lower():
+            continue
+        return row
+    return rows[0] if rows else None
+
+
+async def fetch_rajaongkir_quote(city: str, province: str, weight_grams: int, courier: str = "jne") -> Optional[ShippingQuote]:
+    global RAJA_DAILY_LIMIT_UNTIL
+    if asyncio.get_event_loop().time() < RAJA_DAILY_LIMIT_UNTIL:
+        return ShippingQuote(message="Kuota harian RajaOngkir sudah habis. Gunakan API key baru atau tunggu kuota reset.")
+    api_key = os.environ.get("RAJAONGKIR_API_KEY", "").strip()
+    origin = os.environ.get("RAJAONGKIR_ORIGIN_CITY_ID", "").strip()
+    origin_name = os.environ.get("RAJAONGKIR_ORIGIN_DESTINATION_SEARCH", os.environ.get("RAJAONGKIR_ORIGIN_CITY_NAME", "")).strip()
+    if not api_key or (not origin and not origin_name) or not city.strip():
+        return None
+
+    headers = {"key": api_key, "Content-Type": "application/x-www-form-urlencoded"}
+    base_url = "https://rajaongkir.komerce.id/api/v1"
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            async def search_destination(search: str) -> Optional[dict]:
+                cache_key = f"{search.strip().lower()}|{province.strip().lower() if search == city else ''}"
+                cached = RAJA_DESTINATION_CACHE.get(cache_key)
+                if cached and (asyncio.get_event_loop().time() - cached[0]) < 900:
+                    return cached[1]
+                response = await client.get(
+                    f"{base_url}/destination/domestic-destination",
+                    headers=headers,
+                    params={"search": search, "limit": 20, "offset": 0},
+                )
+                response.raise_for_status()
+                payload = response.json()
+                if payload.get("meta", {}).get("code") != 200:
+                    return None
+                destination = find_destination_row(payload.get("data") or [], search, province if search == city else "")
+                if destination:
+                    RAJA_DESTINATION_CACHE[cache_key] = (asyncio.get_event_loop().time(), destination)
+                return destination
+
+            async def resolve_district_id(destination: dict) -> str:
+                province_response = await client.get(f"{base_url}/destination/province", headers=headers)
+                province_response.raise_for_status()
+                province_rows = province_response.json().get("data") or []
+                province_name = str(destination.get("province_name", "")).lower()
+                province_row = next((row for row in province_rows if str(row.get("name", "")).lower() == province_name), None)
+                if not province_row:
+                    return ""
+
+                city_response = await client.get(f"{base_url}/destination/city/{province_row['id']}", headers=headers)
+                city_response.raise_for_status()
+                city_rows = city_response.json().get("data") or []
+                city_name = str(destination.get("city_name", "")).lower()
+                city_row = next((row for row in city_rows if str(row.get("name", "")).lower() == city_name), None)
+                if not city_row:
+                    return ""
+
+                district_response = await client.get(f"{base_url}/destination/district/{city_row['id']}", headers=headers)
+                district_response.raise_for_status()
+                district_rows = district_response.json().get("data") or []
+                district_name = str(destination.get("district_name", "")).lower()
+                district_row = next((row for row in district_rows if str(row.get("name", "")).lower() == district_name), None)
+                return str(district_row.get("id", "")) if district_row else ""
+
+            destination = await search_destination(city)
+            global RAJA_ORIGIN_CACHE
+            if not origin and RAJA_ORIGIN_CACHE and (asyncio.get_event_loop().time() - RAJA_ORIGIN_CACHE[0]) < 900:
+                origin = RAJA_ORIGIN_CACHE[1]
+            if not origin:
+                origin_match = await search_destination(origin_name)
+                if origin_match:
+                    origin = await resolve_district_id(origin_match)
+                    if origin:
+                        RAJA_ORIGIN_CACHE = (asyncio.get_event_loop().time(), origin)
+            if not origin:
+                return ShippingQuote(message="District asal gudang belum ditemukan di RajaOngkir")
+            if not destination:
+                return ShippingQuote(message="Alamat tujuan belum ditemukan di RajaOngkir")
+            destination_id = await resolve_district_id(destination)
+            if not destination_id:
+                return ShippingQuote(message="District tujuan belum ditemukan di RajaOngkir")
+
+            cost_response = await client.post(
+                f"{base_url}/calculate/district/domestic-cost",
+                headers=headers,
+                data={
+                    "origin": origin,
+                    "destination": destination_id,
+                    "weight": max(1000, weight_grams),
+                    "courier": courier,
+                    "price": "lowest",
+                },
+            )
+            cost_response.raise_for_status()
+            cost_payload = cost_response.json()
+            if cost_payload.get("meta", {}).get("code") != 200:
+                return ShippingQuote(message=cost_payload.get("meta", {}).get("message", "Tarif RajaOngkir tidak tersedia"))
+            services = cost_payload.get("data") or []
+            if isinstance(services, dict):
+                services = [services]
+            service = next((item for item in services if isinstance(item, dict)), None)
+            if not service:
+                return ShippingQuote(message="Tarif RajaOngkir tidak tersedia untuk tujuan ini")
+            cost = service.get("cost", service.get("price", service.get("value", 0)))
+            if isinstance(cost, list):
+                cost = cost[0].get("value", 0) if cost else 0
+            return ShippingQuote(
+                available=int(cost or 0) > 0,
+                cost=int(cost or 0),
+                service=str(service.get("service", service.get("courier", courier))),
+                etd=str(service.get("etd", service.get("estimation", ""))),
+                source="rajaongkir-komerce",
+                message="" if int(cost or 0) > 0 else "Tarif RajaOngkir tidak tersedia untuk tujuan ini",
+            )
+    except httpx.TimeoutException as exc:
+        logger.warning("RajaOngkir quote timed out: %r", exc)
+        return ShippingQuote(message="RajaOngkir tidak merespons. Coba lagi sebentar.")
+    except httpx.HTTPStatusError as exc:
+        logger.warning("RajaOngkir quote returned HTTP %s: %r", exc.response.status_code, exc)
+        if exc.response.status_code == 429:
+            try:
+                error_payload = exc.response.json()
+            except ValueError:
+                error_payload = {}
+            provider_message = str(error_payload.get("meta", {}).get("message", ""))
+            if "daily limit" in provider_message.lower():
+                RAJA_DAILY_LIMIT_UNTIL = asyncio.get_event_loop().time() + 24 * 60 * 60
+                return ShippingQuote(message="Kuota harian RajaOngkir sudah habis. Gunakan API key baru atau tunggu kuota reset.")
+            return ShippingQuote(message="RajaOngkir sedang membatasi permintaan. Coba lagi setelah beberapa saat.")
+        return ShippingQuote(message=f"RajaOngkir menolak permintaan ({exc.response.status_code})")
+    except (httpx.HTTPError, ValueError, KeyError, TypeError) as exc:
+        logger.warning("RajaOngkir quote failed: %r", exc)
+        return ShippingQuote(message="RajaOngkir sedang tidak tersedia")
+
+
+@api_router.post("/shipping/quote", response_model=ShippingQuote)
+async def shipping_quote(payload: ShippingQuoteInput):
+    total_weight_grams = payload.weight_grams
+    if payload.items:
+        book_ids = list(dict.fromkeys(item.get("book_id", "") for item in payload.items))
+        books = await db.books.find({"id": {"$in": book_ids}}, {"_id": 0, "id": 1, "type": 1, "weight_grams": 1}).to_list(100)
+        books_by_id = {book["id"]: book for book in books}
+        total_weight_grams = 0
+        for item in payload.items:
+            book = books_by_id.get(item.get("book_id", ""))
+            if not book:
+                raise HTTPException(status_code=404, detail="Buku untuk ongkir tidak ditemukan")
+            if book.get("type") == "fisik":
+                total_weight_grams += max(0, int(book.get("weight_grams", 0))) * max(1, int(item.get("qty", 1)))
+    billable_weight_kg = calculate_billable_weight_kg(total_weight_grams) if total_weight_grams > 0 else 0
+    if billable_weight_kg <= 0:
+        return ShippingQuote(message="Berat buku fisik belum diatur", total_weight_grams=total_weight_grams)
+    quote_result = await fetch_rajaongkir_quote(payload.city, payload.province, billable_weight_kg * 1000, payload.courier)
+    if quote_result:
+        quote_result.total_weight_grams = total_weight_grams
+        quote_result.billable_weight_kg = billable_weight_kg
+    return quote_result or ShippingQuote(message="Konfigurasi asal gudang belum lengkap")
+
+
 @api_router.get("/payment-methods", response_model=List[PaymentMethod])
 async def list_payment_methods():
     docs = await db.payment_methods.find({"active": True}, {"_id": 0}).to_list(50)
@@ -749,17 +973,23 @@ async def create_order(payload: OrderCreate):
                 if stock <= 0:
                     raise HTTPException(status_code=400, detail=f"Stok habis: {d['title']}")
                 await db.books.update_one({"id": d["id"]}, {"$inc": {"stock": -1}})
-        items.append(OrderItem(book_id=d["id"], title=d["title"], price=price, qty=qty, variant_id=w.variant_id, variant_label=vlabel))
+        weight_grams = max(0, int(d.get("weight_grams", 0))) if d.get("type") == "fisik" else 0
+        items.append(OrderItem(book_id=d["id"], title=d["title"], price=price, qty=qty, variant_id=w.variant_id, variant_label=vlabel, weight_grams=weight_grams))
 
     subtotal = sum(i.price * i.qty for i in items)
     shipping = 0
+    total_weight_grams = sum(i.weight_grams * i.qty for i in items if i.weight_grams > 0)
+    billable_weight_kg = 0
     if payload.order_type == "fisik":
-        region = await db.shipping_regions.find_one({"name": payload.region}, {"_id": 0})
-        if not region:
-            raise HTTPException(status_code=400, detail="Wilayah pengiriman tidak valid")
-        physical_units = sum(i.qty for i in items)
-        shipping_multiplier = max(1, math.ceil(physical_units / 5))
-        shipping = region["cost"] * shipping_multiplier
+        region = await db.shipping_regions.find_one({"name": payload.region}, {"_id": 0}) if payload.region else None
+        billable_weight_kg = calculate_billable_weight_kg(total_weight_grams)
+        quote_result = await fetch_rajaongkir_quote(payload.city, payload.province, billable_weight_kg * 1000, os.environ.get("RAJAONGKIR_COURIER", "jne"))
+        if quote_result and quote_result.available:
+            shipping = quote_result.cost
+        elif region:
+            shipping = region["cost"] * billable_weight_kg
+        else:
+            raise HTTPException(status_code=503, detail=(quote_result.message if quote_result else "RajaOngkir belum tersedia"))
 
     discount_amount = 0
     voucher_code = (payload.voucher_code or "").strip().upper()
@@ -791,7 +1021,8 @@ async def create_order(payload: OrderCreate):
         customer_phone=payload.customer_phone, items=items, order_type=payload.order_type,
         address=payload.address, city=payload.city, province=payload.province,
         postal_code=payload.postal_code, region=payload.region, notes=payload.notes,
-        shipping_cost=shipping, subtotal=subtotal, discount_amount=discount_amount,
+        shipping_cost=shipping, total_weight_grams=total_weight_grams, billable_weight_kg=billable_weight_kg,
+        subtotal=subtotal, discount_amount=discount_amount,
         total=total, voucher_code=voucher_code,
     )
     await db.orders.insert_one(order.model_dump())

@@ -19,10 +19,10 @@ import { filterAdminBookRowsByType } from "@/lib/adminBookFilters";
 interface BookForm {
   title: string; author: string; language: string; type: string; price: string;
   description: string; cover_url: string; badge: string; featured: boolean;
-  shopee_url: string; tokopedia_url: string; tiktok_url: string; stock: string;
+  shopee_url: string; tokopedia_url: string; tiktok_url: string; stock: string; weight_grams: string;
   categories: string[];
 }
-const EMPTY_FORM: BookForm = { title: "", author: "", language: "mandarin", type: "digital", price: "", description: "", cover_url: "", badge: "", featured: false, shopee_url: "", tokopedia_url: "", tiktok_url: "", stock: "-1", categories: [] };
+const EMPTY_FORM: BookForm = { title: "", author: "", language: "mandarin", type: "digital", price: "", description: "", cover_url: "", badge: "", featured: false, shopee_url: "", tokopedia_url: "", tiktok_url: "", stock: "-1", weight_grams: "0", categories: [] };
 
 interface VGroup { name: string; options: string }
 interface VRow { id: string; label: string; selections: Record<string, string>; price: string; stock: string }
@@ -146,6 +146,7 @@ export default function AdminDashboard() {
         ...form,
         price: parseInt(form.price) || 0,
         stock: parseStock(form.stock),
+        weight_grams: form.type === "fisik" ? Math.max(0, parseInt(form.weight_grams) || 0) : 0,
         categories: form.categories,
         variant_groups: groups,
         variants: vRows.map((r) => ({ id: r.id, label: r.label, selections: r.selections, price: parseInt(r.price) || 0, stock: parseStock(r.stock) })),
@@ -269,7 +270,7 @@ export default function AdminDashboard() {
 
   const openEdit = (b: Book) => {
     setEditing(b);
-    setForm({ title: b.title, author: b.author, language: b.language, type: b.type, price: String(b.price), description: b.description, cover_url: b.cover_url, badge: b.badge, featured: b.featured, shopee_url: b.shopee_url, tokopedia_url: b.tokopedia_url, tiktok_url: b.tiktok_url, stock: String(b.stock ?? -1), categories: b.categories ?? [] });
+    setForm({ title: b.title, author: b.author, language: b.language, type: b.type, price: String(b.price), description: b.description, cover_url: b.cover_url, badge: b.badge, featured: b.featured, shopee_url: b.shopee_url, tokopedia_url: b.tokopedia_url, tiktok_url: b.tiktok_url, stock: String(b.stock ?? -1), weight_grams: String(b.weight_grams ?? 0), categories: b.categories ?? [] });
     setVGroups(b.variant_groups.map((g) => ({ name: g.name, options: g.options.join(", ") })));
     setVRows(b.variants.map((v) => ({ id: v.id, label: v.label, selections: v.selections, price: String(v.price), stock: String(v.stock ?? -1) })));
     setDialogOpen(true);
@@ -856,6 +857,13 @@ export default function AdminDashboard() {
               <div className="sm:col-span-2">
                 <Label>Stok buku fisik (kosongkan / -1 = tanpa batas)</Label>
                 <Input data-testid="admin-book-stock-input" type="number" value={form.stock} onChange={(e) => setForm({ ...form, stock: e.target.value })} className="mt-1.5" />
+              </div>
+            )}
+            {form.type === "fisik" && (
+              <div className="sm:col-span-2">
+                <Label>Berat per buku (gram) *</Label>
+                <Input data-testid="admin-book-weight-input" type="number" min="1" value={form.weight_grams} onChange={(e) => setForm({ ...form, weight_grams: e.target.value })} placeholder="Contoh: 450" className="mt-1.5" />
+                <p className="mt-1 text-xs text-[#635F59]">Ebook digital tidak membutuhkan berat.</p>
               </div>
             )}
             <div className="sm:col-span-2">

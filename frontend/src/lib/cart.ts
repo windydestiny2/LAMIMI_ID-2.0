@@ -9,6 +9,7 @@ export interface CartItem {
   cover_url: string;
   qty: number;
   stock?: number;
+  weight_grams: number;
 }
 
 const KEY = "lamimi_cart_v2";
@@ -17,7 +18,7 @@ const EVENT = "lamimi-cart";
 export function getCart(): CartItem[] {
   try {
     const raw = JSON.parse(localStorage.getItem(KEY) ?? "[]");
-    return Array.isArray(raw) ? raw.map((i) => ({ ...i, qty: i.qty ?? 1 })) : [];
+    return Array.isArray(raw) ? raw.map((i) => ({ ...i, qty: i.qty ?? 1, weight_grams: i.weight_grams ?? 0 })) : [];
   } catch {
     return [];
   }
@@ -33,6 +34,7 @@ export function addToCart(item: CartItem): { ok: boolean; reason?: "dupe" | "tip
   const existing = items.find((i) => i.key === item.key);
   if (existing) {
     existing.qty += item.qty ?? 1;
+    existing.weight_grams = item.weight_grams ?? existing.weight_grams ?? 0;
     save(items);
     return { ok: true };
   }

@@ -35,6 +35,7 @@ export function handleAddToCart(book: Book, variant?: Variant) {
     cover_url: book.cover_url,
     qty: 1,
     stock: variant?.stock ?? book.stock,
+    weight_grams: book.type === "fisik" ? (book.weight_grams ?? 0) : 0,
   });
   if (r.ok) toast.success(`"${book.title}${variant ? ` — ${variant.label}` : ""}" masuk keranjang`);
   else if (r.reason === "dupe") toast.error("Item ini sudah ada di keranjang.");
@@ -92,6 +93,7 @@ export function BookCard({ book }: { book: Book }) {
         <p className="mt-2 font-mono text-lg font-bold tracking-tight text-[#9C4221]" data-testid={`book-price-${book.id}`}>
           {hasVariants ? `Mulai ${rupiah(minPrice)}` : rupiah(book.price)}
         </p>
+        {!isDigital && <p className="mt-1 text-xs text-[#635F59]">Berat {(book.weight_grams ?? 0).toLocaleString("id-ID")} gram</p>}
         <div className="mt-3 flex-1" />
         <Link
           to={buyTo}

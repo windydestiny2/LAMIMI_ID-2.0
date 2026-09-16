@@ -29,6 +29,7 @@ export interface Book {
   variant_groups: VariantGroup[];
   variants: Variant[];
   stock: number; // -1 = unlimited (ebook default)
+  weight_grams: number; // physical books only
   created_at: string;
 }
 
@@ -60,6 +61,7 @@ export interface OrderItem {
   qty: number;
   variant_id: string;
   variant_label: string;
+  weight_grams: number;
 }
 
 export interface Order {
@@ -77,6 +79,8 @@ export interface Order {
   region: string;
   notes: string;
   shipping_cost: number;
+  total_weight_grams: number;
+  billable_weight_kg: number;
   subtotal: number;
   discount_amount: number;
   total: number;
@@ -100,6 +104,17 @@ export interface ShippingRegion {
   name: string;
   cost: number;
   eta: string;
+}
+
+export interface ShippingQuote {
+  available: boolean;
+  cost: number;
+  service: string;
+  etd: string;
+  source: string;
+  message: string;
+  total_weight_grams: number;
+  billable_weight_kg: number;
 }
 
 export interface PaymentMethod {

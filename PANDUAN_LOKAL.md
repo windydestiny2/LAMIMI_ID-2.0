@@ -40,6 +40,11 @@ ADMIN_EMAIL="admin@lamimi.id"
 ADMIN_PASSWORD="Windy_0803"
 OWNER_WHATSAPP="6285173290889"
 SHOPEE_URL="https://s.shopee.co.id/8AV4Tsb6bM"
+RAJAONGKIR_API_KEY="isi_api_key_rajaongkir"
+RAJAONGKIR_ORIGIN_CITY_ID="isi_id_kota_asal_gudang"
+RAJAONGKIR_ORIGIN_CITY_NAME="Kabupaten Bogor"
+RAJAONGKIR_ORIGIN_DESTINATION_SEARCH="Cibinong"
+RAJAONGKIR_COURIER="jne"
 ```
 
 Jika frontend menampilkan error `ECONNREFUSED` di Terminal, artinya backend belum jalan — perbaiki backend dulu, lalu refresh browser.

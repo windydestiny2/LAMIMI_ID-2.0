@@ -2,10 +2,10 @@ import { useEffect, useMemo, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { motion } from "motion/react";
-import { ArrowLeft, CheckCircle2, Copy, ImageUp, Loader2, MessageCircle, PackageSearch, ShieldCheck, ShoppingBag } from "lucide-react";
+import { ArrowLeft, CheckCircle2, Copy, ExternalLink, ImageUp, Loader2, MessageCircle, PackageSearch, ShieldCheck, ShoppingBag } from "lucide-react";
 import { toast } from "sonner";
 import { apiGet, apiPost } from "@/lib/api";
-import type { Book, OrderResponse, PaymentMethod, ShippingRegion } from "@/lib/types";
+import type { Book, OrderResponse, PaymentMethod, ShippingQuote } from "@/lib/types";
 import { rupiah } from "@/lib/format";
 import { apiErrorMessage } from "@/lib/adminApi";
 import { clearCart, getCart, type CartItem } from "@/lib/cart";
@@ -14,8 +14,7 @@ import { Footer } from "@/components/Footer";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { validateCheckoutContact } from "@/lib/checkoutValidation";
+import { billableWeightKg, validateCheckoutContact } from "@/lib/checkoutValidation";
 
 export default function Checkout() {
   const { id } = useParams();
@@ -34,7 +33,6 @@ export default function Checkout() {
     retry: false,
     enabled: !isCart,
   });
-  const { data: regions } = useQuery({ queryKey: ["shipping"], queryFn: () => apiGet<ShippingRegion[]>("/shipping") });
   const { data: methods } = useQuery({ queryKey: ["payment-methods"], queryFn: () => apiGet<PaymentMethod[]>("/payment-methods") });
 
   const [step, setStep] = useState<1 | 2 | 3>(1);
@@ -43,6 +41,7 @@ export default function Checkout() {
   const [method, setMethod] = useState("");
   const [proof, setProof] = useState("");
   const [result, setResult] = useState<OrderResponse | null>(null);
+  const [quoteLocation, setQuoteLocation] = useState({ city: "", province: "" });
 
   const items = useMemo(() => {
     if (isCart) return cartItems;
@@ -59,17 +58,25 @@ export default function Checkout() {
       cover_url: book.cover_url,
       qty: 1,
       stock: variant?.stock ?? book.stock,
+      weight_grams: book.type === "fisik" ? (book.weight_grams ?? 0) : 0,
     }];
   }, [isCart, cartItems, book, variantId]);
 
   const orderType = items[0]?.type ?? "digital";
   const isPhysical = orderType === "fisik";
   const subtotal = items.reduce((s, i) => s + i.price * i.qty, 0);
-  const selectedRegion = regions?.find((r) => r.name === form.region);
   const quantityTotal = items.reduce((s, i) => s + i.qty, 0);
-  const physicalUnits = items.filter((i) => i.type === "fisik").reduce((s, i) => s + i.qty, 0);
-  const shippingMultiplier = isPhysical ? Math.max(1, Math.ceil(physicalUnits / 5)) : 1;
-  const shippingCost = isPhysical ? (selectedRegion?.cost ?? 0) * shippingMultiplier : 0;
+  const totalWeightGrams = items.filter((i) => i.type === "fisik").reduce((s, i) => s + i.weight_grams * i.qty, 0);
+  const billableWeight = isPhysical ? billableWeightKg(totalWeightGrams) : 0;
+  const { data: shippingQuote, isFetching: shippingQuoteLoading } = useQuery({
+    queryKey: ["shipping-quote", quoteLocation.city, quoteLocation.province, items.map((i) => `${i.id}:${i.qty}`).join("|")],
+    queryFn: () => apiPost<ShippingQuote>("/shipping/quote", { city: quoteLocation.city, province: quoteLocation.province, items: items.map((i) => ({ book_id: i.id, variant_id: i.variant_id, qty: i.qty })), courier: "jne" }),
+    enabled: isPhysical && quoteLocation.city.length >= 3 && quoteLocation.province.length >= 3 && billableWeight > 0,
+    retry: false,
+    staleTime: 30_000,
+  });
+  const shippingCost = isPhysical && shippingQuote?.available ? shippingQuote.cost : 0;
+  const mapQuery = [form.address, form.city, form.province, form.postal].filter(Boolean).join(", ");
   const total = subtotal + shippingCost;
   const selectedMethod = methods?.find((m) => m.name === method);
 
@@ -85,7 +92,7 @@ export default function Checkout() {
         city: form.city,
         province: form.province,
         postal_code: form.postal,
-        region: form.region,
+        region: "",
         notes: form.notes,
         voucher_code: voucherCode.trim().toUpperCase(),
       }),
@@ -110,6 +117,13 @@ export default function Checkout() {
   const set = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
     setForm((f) => ({ ...f, [k]: e.target.value }));
 
+  const requestShippingQuote = () => {
+    if (form.city.trim().length < 3 || form.province.trim().length < 3) {
+      return toast.error("Isi kota dan provinsi terlebih dahulu untuk mengecek ongkir.");
+    }
+    setQuoteLocation({ city: form.city.trim(), province: form.province.trim() });
+  };
+
   const submitForm = () => {
     if (!form.name.trim()) return toast.error("Isi nama lengkap dulu ya.");
 
@@ -120,8 +134,10 @@ export default function Checkout() {
     });
     if (contactError) return toast.error(contactError);
 
-    if (isPhysical && (!form.address.trim() || !form.city.trim() || !form.province.trim() || !form.region))
-      return toast.error("Lengkapi alamat dan wilayah pengiriman dulu ya.");
+    if (isPhysical && (!form.address.trim() || !form.city.trim() || !form.province.trim()))
+      return toast.error("Lengkapi alamat, kota, dan provinsi dulu ya.");
+    if (isPhysical && !shippingQuote?.available)
+      return toast.error(shippingQuote?.message || "Tarif RajaOngkir belum tersedia. Coba lagi sebentar.");
     createOrder.mutate();
   };
 
@@ -192,10 +208,10 @@ export default function Checkout() {
                     {isPhysical && (
                       <div className="flex justify-between text-[#635F59]">
                         <span>
-                          Ongkir JNE {selectedRegion ? `(${selectedRegion.name})` : ""}
-                          {shippingMultiplier > 1 && <span className="ml-1 font-semibold text-[#9C4221]">x{shippingMultiplier}</span>}
+                          Ongkir {shippingQuote?.service || "RajaOngkir"}
+                          {(shippingQuote?.billable_weight_kg ?? billableWeight) > 0 && <span className="ml-1 font-semibold text-[#9C4221]">({shippingQuote?.billable_weight_kg ?? billableWeight} kg)</span>}
                         </span>
-                        <span>{selectedRegion ? rupiah(shippingCost) : "—"}</span>
+                        <span>{shippingQuote?.available ? rupiah(shippingCost) : "—"}</span>
                       </div>
                     )}
                     <div className="flex justify-between border-t border-[#E8DFC8] pt-2 font-mono text-base font-bold text-[#9C4221]">
@@ -241,26 +257,35 @@ export default function Checkout() {
                             <Label htmlFor="postal">Kode pos</Label>
                             <Input id="postal" data-testid="checkout-postal-input" value={form.postal} onChange={set("postal")} placeholder="16xxx" className="mt-1.5" />
                           </div>
-                          <div>
-                            <Label>Wilayah pengiriman (ongkir JNE) *</Label>
-                            <Select value={form.region} onValueChange={(v) => setForm((f) => ({ ...f, region: v }))}>
-                              <SelectTrigger className="mt-1.5 w-full" data-testid="shipping-region-select">
-                                <SelectValue>{(v: string) => (v ? `${v} — ${rupiah(regions?.find((r) => r.name === v)?.cost ?? 0)}` : "Pilih wilayah")}</SelectValue>
-                              </SelectTrigger>
-                              <SelectContent>
-                                {(regions ?? []).map((r) => (
-                                  <SelectItem key={r.id} value={r.name} data-testid={`region-option-${r.name.replace(/[^a-z]/gi, "-").toLowerCase()}`}>
-                                    {r.name} — {rupiah(r.cost)} · {r.eta}
-                                  </SelectItem>
-                                ))}
-                              </SelectContent>
-                            </Select>
+                          <div className="rounded-2xl border border-[#E8DFC8] bg-[#FDF8EE] p-3 sm:col-span-2" data-testid="shipping-quote-status">
+                            <div className="flex items-center justify-between gap-3">
+                              <p className="text-xs font-bold uppercase tracking-wide text-[#9C4221]">Ongkir otomatis RajaOngkir</p>
+                              <button type="button" onClick={requestShippingQuote} disabled={shippingQuoteLoading} data-testid="shipping-quote-button" className="rounded-full bg-[#DD6B20] px-3 py-2 text-xs font-semibold text-white hover:bg-[#C05621] disabled:opacity-60">
+                                {shippingQuoteLoading ? "Mengecek..." : "Cek ongkir"}
+                              </button>
+                            </div>
+                            <p className="mt-1 text-sm text-[#635F59]">
+                              {quoteLocation.city && shippingQuote?.available
+                                ? `${shippingQuote.service} · ${rupiah(shippingQuote.cost)}${shippingQuote.etd ? ` · estimasi ${shippingQuote.etd}` : ""}`
+                                : shippingQuote?.message || "Isi kota dan provinsi, lalu tekan Cek ongkir."
+                              }
+                            </p>
+                          </div>
+                          <div className="sm:col-span-2 rounded-2xl border border-[#E8DFC8] bg-[#FDF8EE] p-3">
+                            <div className="flex items-center justify-between gap-3">
+                              <div>
+                                <p className="text-xs font-bold uppercase tracking-wide text-[#9C4221]">Lokasi pengiriman</p>
+                                <p className="mt-1 text-xs text-[#635F59]">Titik mengikuti alamat yang kamu isi di Google Maps.</p>
+                              </div>
+                              {mapQuery && <a href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(mapQuery)}`} target="_blank" rel="noreferrer" className="inline-flex shrink-0 items-center gap-1 rounded-full border border-[#E8DFC8] bg-white px-3 py-2 text-xs font-semibold text-[#635F59] hover:border-[#DD6B20] hover:text-[#C05621]"><ExternalLink className="size-3.5" /> Maps</a>}
+                            </div>
+                            {mapQuery && <iframe title="Lokasi alamat pengiriman" src={`https://www.google.com/maps?q=${encodeURIComponent(mapQuery)}&output=embed`} className="mt-3 h-48 w-full rounded-xl border-0" loading="lazy" />}
                           </div>
                         </>
                       )}
                       <div className="sm:col-span-2">
-                        <Label htmlFor="notes">Catatan (opsional)</Label>
-                        <Input id="notes" data-testid="checkout-notes-input" value={form.notes} onChange={set("notes")} placeholder="Contoh: kirim secepatnya ya" className="mt-1.5" />
+                            <Label htmlFor="notes">Catatan / patokan (opsional)</Label>
+                            <Input id="notes" data-testid="checkout-notes-input" value={form.notes} onChange={set("notes")} placeholder="Contoh: pagar warna hitam, dekat minimarket" className="mt-1.5" />
                       </div>
                       <div className="sm:col-span-2">
                         <Label htmlFor="voucherCode">Kode Promo / Voucher (opsional)</Label>
@@ -269,7 +294,7 @@ export default function Checkout() {
                     </div>
                     <button
                       onClick={submitForm}
-                      disabled={createOrder.isPending}
+                      disabled={createOrder.isPending || (isPhysical && !shippingQuote?.available)}
                       data-testid="checkout-submit-button"
                       className="mt-7 inline-flex w-full items-center justify-center gap-2 rounded-full bg-[#DD6B20] px-6 py-3.5 text-sm font-semibold text-white transition-colors hover:bg-[#C05621] disabled:opacity-60"
                     >
@@ -298,11 +323,11 @@ export default function Checkout() {
                           </li>
                           <li className="flex items-start gap-2">
                             <span className="mt-2 size-1.5 rounded-full bg-[#DD6B20]" />
-                            <span>Ongkir berkelipatan setiap pembelian 5 pcs buku.</span>
+                            <span>Ongkir dihitung dari total berat buku. Berat minimum 1 kg; toleransi pembulatan 300 gram.</span>
                           </li>
                           <li className="flex items-start gap-2">
                             <span className="mt-2 size-1.5 rounded-full bg-[#DD6B20]" />
-                            <span>Mohon isi ongkir sesuai alamat, jika tidak sesuai maka pengiriman tidak akan diproses.</span>
+                            <span>Ongkir dihitung otomatis RajaOngkir berdasarkan kota tujuan, jarak layanan, dan berat total paket.</span>
                           </li>
                         </ul>
                       </div>
