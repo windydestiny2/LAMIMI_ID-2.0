@@ -18,11 +18,11 @@ import { filterAdminBookRowsByType } from "@/lib/adminBookFilters";
 
 interface BookForm {
   title: string; author: string; language: string; type: string; price: string;
-  description: string; cover_url: string; badge: string; featured: boolean;
+  description: string; cover_url: string; image_urls: string[]; badge: string; featured: boolean;
   shopee_url: string; tokopedia_url: string; tiktok_url: string; stock: string; weight_grams: string;
   categories: string[];
 }
-const EMPTY_FORM: BookForm = { title: "", author: "", language: "mandarin", type: "digital", price: "", description: "", cover_url: "", badge: "", featured: false, shopee_url: "", tokopedia_url: "", tiktok_url: "", stock: "-1", weight_grams: "0", categories: [] };
+const EMPTY_FORM: BookForm = { title: "", author: "", language: "mandarin", type: "digital", price: "", description: "", cover_url: "", image_urls: [], badge: "", featured: false, shopee_url: "", tokopedia_url: "", tiktok_url: "", stock: "-1", weight_grams: "0", categories: [] };
 
 interface VGroup { name: string; options: string }
 interface VRow { id: string; label: string; selections: Record<string, string>; price: string; stock: string }
@@ -147,6 +147,7 @@ export default function AdminDashboard() {
         price: parseInt(form.price) || 0,
         stock: parseStock(form.stock),
         weight_grams: form.type === "fisik" ? Math.max(0, parseInt(form.weight_grams) || 0) : 0,
+        image_urls: form.image_urls.filter(Boolean),
         categories: form.categories,
         variant_groups: groups,
         variants: vRows.map((r) => ({ id: r.id, label: r.label, selections: r.selections, price: parseInt(r.price) || 0, stock: parseStock(r.stock) })),
@@ -270,7 +271,7 @@ export default function AdminDashboard() {
 
   const openEdit = (b: Book) => {
     setEditing(b);
-    setForm({ title: b.title, author: b.author, language: b.language, type: b.type, price: String(b.price), description: b.description, cover_url: b.cover_url, badge: b.badge, featured: b.featured, shopee_url: b.shopee_url, tokopedia_url: b.tokopedia_url, tiktok_url: b.tiktok_url, stock: String(b.stock ?? -1), weight_grams: String(b.weight_grams ?? 0), categories: b.categories ?? [] });
+    setForm({ title: b.title, author: b.author, language: b.language, type: b.type, price: String(b.price), description: b.description, cover_url: b.cover_url, image_urls: b.image_urls ?? [], badge: b.badge, featured: b.featured, shopee_url: b.shopee_url, tokopedia_url: b.tokopedia_url, tiktok_url: b.tiktok_url, stock: String(b.stock ?? -1), weight_grams: String(b.weight_grams ?? 0), categories: b.categories ?? [] });
     setVGroups(b.variant_groups.map((g) => ({ name: g.name, options: g.options.join(", ") })));
     setVRows(b.variants.map((v) => ({ id: v.id, label: v.label, selections: v.selections, price: String(v.price), stock: String(v.stock ?? -1) })));
     setDialogOpen(true);
@@ -322,6 +323,22 @@ export default function AdminDashboard() {
       toast.success("Gambar sampul berhasil diupload");
     } catch (err) {
       toast.error(apiErrorMessage(err));
+    }
+  };
+
+  const onGalleryFiles = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files ?? []);
+    if (!files.length) return;
+    if (files.some((file) => !file.type.startsWith("image/"))) return toast.error("Semua file harus berupa gambar.");
+    if (files.some((file) => file.size > 2 * 1024 * 1024)) return toast.error("Setiap gambar maksimal 2 MB.");
+    try {
+      const uploads = await Promise.all(files.map((file) => uploadCover(file)));
+      setForm((current) => ({ ...current, image_urls: [...current.image_urls, ...uploads.map((upload) => upload.cover_url)] }));
+      toast.success(`${uploads.length} foto berhasil ditambahkan`);
+    } catch (err) {
+      toast.error(apiErrorMessage(err));
+    } finally {
+      e.target.value = "";
     }
   };
 
@@ -890,6 +907,25 @@ export default function AdminDashboard() {
                 </label>
               </div>
               {form.cover_url && <img src={form.cover_url} alt="Sampul buku" className="mt-2 max-h-20 rounded-lg border border-[#E8DFC8] object-cover" />}
+              <div className="mt-3">
+                <Label>Foto tambahan produk</Label>
+                <label className="mt-1.5 inline-flex cursor-pointer items-center gap-2 rounded-full border border-[#E8DFC8] bg-white px-3 py-2 text-xs font-semibold text-[#635F59] hover:border-[#DD6B20] hover:text-[#C05621]">
+                  <ImageUp className="size-4 text-[#DD6B20]" /> Upload beberapa foto
+                  <input type="file" accept="image/*" multiple className="hidden" onChange={onGalleryFiles} data-testid="admin-book-gallery-files" />
+                </label>
+                {form.image_urls.length > 0 && (
+                  <div className="mt-2 grid grid-cols-5 gap-2">
+                    {form.image_urls.map((url, index) => (
+                      <div key={`${url}-${index}`} className="relative">
+                        <img src={url} alt={`Foto tambahan ${index + 1}`} className="aspect-square w-full rounded-lg border border-[#E8DFC8] object-cover" />
+                        <button type="button" onClick={() => setForm((current) => ({ ...current, image_urls: current.image_urls.filter((_, imageIndex) => imageIndex !== index) }))} className="absolute right-1 top-1 rounded-full bg-white/90 p-1 text-[#635F59] hover:text-red-600" aria-label={`Hapus foto tambahan ${index + 1}`}>
+                          <X className="size-3" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
             <div><Label>Badge</Label><Input data-testid="admin-book-badge-input" value={form.badge} onChange={(e) => setForm({ ...form, badge: e.target.value })} placeholder="Best Seller" className="mt-1.5" /></div>
             <div className="flex items-end gap-2 pb-1">

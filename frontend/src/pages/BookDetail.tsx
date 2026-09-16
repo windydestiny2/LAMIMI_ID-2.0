@@ -25,6 +25,7 @@ export default function BookDetail() {
     enabled: !!book,
   });
   const [sel, setSel] = useState<Record<string, string>>({});
+  const [selectedImage, setSelectedImage] = useState<string | null>(null);
 
   const isDigital = book?.type === "digital";
   const meta = book ? LANGUAGE_META[book.language] : undefined;
@@ -100,7 +101,16 @@ export default function BookDetail() {
           <div className="mt-8 grid gap-10 lg:grid-cols-12">
             <Reveal className="lg:col-span-4">
               <div className={`rounded-[2rem] border p-6 ${meta?.card ?? "border-[#E8DFC8] bg-[#F5EDE0]"}`}>
-                <img src={book.cover_url} alt={book.title} className="w-full rounded-2xl shadow-2xl" data-testid="detail-cover" />
+                <img src={selectedImage ?? book.cover_url} alt={book.title} className="w-full rounded-2xl shadow-2xl" data-testid="detail-cover" />
+                {(book.image_urls ?? []).length > 0 && (
+                  <div className="mt-4 grid grid-cols-5 gap-2" data-testid="detail-gallery">
+                    {[book.cover_url, ...(book.image_urls ?? [])].filter((url, index, urls) => url && urls.indexOf(url) === index).map((url) => (
+                      <button key={url} type="button" onClick={() => setSelectedImage(url)} className={`overflow-hidden rounded-lg border-2 ${selectedImage === url || (!selectedImage && url === book.cover_url) ? "border-[#DD6B20]" : "border-transparent"}`}>
+                        <img src={url} alt={`${book.title} thumbnail`} className="aspect-square w-full object-cover" />
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
             </Reveal>
             <div className="lg:col-span-8 lg:pt-4">

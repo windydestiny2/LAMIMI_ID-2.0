@@ -236,7 +236,7 @@ export default function Checkout() {
                         <Input id="phone" data-testid="checkout-phone-input" value={form.phone} onChange={set("phone")} placeholder="08xxxxxxxxxx" className="mt-1.5" />
                       </div>
                       <div className="sm:col-span-2">
-                        <Label htmlFor="email">Email {isPhysical ? "" : "*"}</Label>
+                        <Label htmlFor="email">Email *</Label>
                         <Input id="email" type="email" data-testid="checkout-email-input" value={form.email} onChange={set("email")} placeholder="email@kamu.com" className="mt-1.5" />
                       </div>
                       {isPhysical && (

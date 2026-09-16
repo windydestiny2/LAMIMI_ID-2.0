@@ -20,6 +20,7 @@ export interface Book {
   price: number;
   description: string;
   cover_url: string;
+  image_urls?: string[];
   badge: string;
   featured: boolean;
   shopee_url: string;

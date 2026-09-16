@@ -22,12 +22,12 @@ export function validateCheckoutContact(form: { email: string; phone: string; is
     return 'Nomor WhatsApp harus berupa nomor WhatsApp yang benar.';
   }
 
-  if (!form.isPhysical && !form.email.trim()) {
-    return 'Isi email untuk pengiriman ebook ya.';
+  if (!form.email.trim()) {
+    return form.isPhysical ? 'Isi email agar notifikasi pesanan bisa dikirim.' : 'Isi email untuk pengiriman ebook ya.';
   }
 
-  if (!form.isPhysical && !isValidEmail(form.email)) {
-    return 'Email harus benar agar ebook bisa dikirim.';
+  if (!isValidEmail(form.email)) {
+    return form.isPhysical ? 'Email harus benar agar notifikasi pesanan bisa dikirim.' : 'Email harus benar agar ebook bisa dikirim.';
   }
 
   return '';
