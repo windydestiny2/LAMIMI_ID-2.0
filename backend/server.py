@@ -375,6 +375,7 @@ class Book(BaseModel):
     variants: List[Variant] = []
     stock: int = -1  # -1 = unlimited (default untuk ebook)
     weight_grams: int = 0  # only used for physical books
+    sold_count: int = 0
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
@@ -775,6 +776,19 @@ async def root():
     return {"message": "LAMIMI_ID API"}
 
 
+async def get_sold_counts(book_ids: List[str]) -> dict[str, int]:
+    if not book_ids:
+        return {}
+    pipeline = [
+        {"$match": {"status": {"$in": PAID_STATUSES}, "items.book_id": {"$in": book_ids}}},
+        {"$unwind": "$items"},
+        {"$match": {"items.book_id": {"$in": book_ids}}},
+        {"$group": {"_id": "$items.book_id", "sold_count": {"$sum": "$items.qty"}}},
+    ]
+    rows = await db.orders.aggregate(pipeline).to_list(len(book_ids))
+    return {row["_id"]: int(row.get("sold_count", 0)) for row in rows}
+
+
 @api_router.get("/books", response_model=List[Book])
 async def list_books(type: Optional[str] = None, language: Optional[str] = None, featured: Optional[bool] = None):
     query: dict = {}
@@ -785,6 +799,9 @@ async def list_books(type: Optional[str] = None, language: Optional[str] = None,
     if featured is not None:
         query["featured"] = featured
     docs = await db.books.find(query, {"_id": 0}).to_list(500)
+    sold_counts = await get_sold_counts([doc["id"] for doc in docs])
+    for doc in docs:
+        doc["sold_count"] = sold_counts.get(doc["id"], 0)
     return [Book(**d) for d in docs]
 
 
@@ -837,6 +854,7 @@ async def get_book(book_id: str):
     doc = await db.books.find_one({"id": book_id}, {"_id": 0})
     if not doc:
         raise HTTPException(status_code=404, detail="Buku tidak ditemukan")
+    doc["sold_count"] = (await get_sold_counts([book_id])).get(book_id, 0)
     return Book(**doc)
 
 
@@ -1275,12 +1293,14 @@ async def admin_stats(user=Depends(get_admin)):
     )
 
 
-@api_router.get("/admin/orders", response_model=List[Order])
+@api_router.get("/admin/orders")
 async def admin_orders(
     type: Optional[str] = None,
     status: Optional[str] = None,
     search: Optional[str] = None,
     date: Optional[str] = None,
+    page: int = 1,
+    page_size: int = 15,
     user=Depends(get_admin),
 ):
     query: dict = {}
@@ -1306,8 +1326,17 @@ async def admin_orders(
         except Exception:
             query["created_at"] = {"$exists": True}
 
-    docs = await db.orders.find(query, {"_id": 0}).sort("created_at", -1).to_list(1000)
-    return [Order(**d) for d in docs]
+    page = max(1, page)
+    page_size = min(max(1, page_size), 50)
+    total = await db.orders.count_documents(query)
+    docs = await db.orders.find(query, {"_id": 0}).sort("created_at", -1).skip((page - 1) * page_size).limit(page_size).to_list(page_size)
+    return {
+        "items": [Order(**d) for d in docs],
+        "page": page,
+        "page_size": page_size,
+        "total": total,
+        "page_count": max(1, math.ceil(total / page_size)),
+    }
 
 
 @api_router.post("/admin/languages", response_model=LanguageEntry)
