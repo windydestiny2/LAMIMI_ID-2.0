@@ -788,6 +788,50 @@ async def list_books(type: Optional[str] = None, language: Optional[str] = None,
     return [Book(**d) for d in docs]
 
 
+@api_router.get("/china-news")
+async def list_china_news():
+    api_key = os.environ.get("NEWS_API_KEY", "").strip()
+    if not api_key:
+        raise HTTPException(status_code=503, detail="Berita China belum dikonfigurasi")
+
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            response = await client.get(
+                "https://newsapi.org/v2/everything",
+                params={
+                    "q": "China",
+                    "searchIn": "title,description",
+                    "language": "en",
+                    "sortBy": "publishedAt",
+                    "pageSize": 6,
+                    "apiKey": api_key,
+                },
+            )
+            response.raise_for_status()
+            payload = response.json()
+    except (httpx.HTTPError, ValueError) as exc:
+        logger.warning("China news request failed: %r", exc)
+        raise HTTPException(status_code=502, detail="Berita China sedang tidak tersedia") from exc
+
+    if payload.get("status") != "ok":
+        raise HTTPException(status_code=502, detail="Berita China sedang tidak tersedia")
+
+    return {
+        "articles": [
+            {
+                "title": article.get("title", ""),
+                "description": article.get("description", ""),
+                "url": article.get("url", ""),
+                "url_to_image": article.get("urlToImage", ""),
+                "source": article.get("source", {}).get("name", "Sumber berita"),
+                "published_at": article.get("publishedAt", ""),
+            }
+            for article in payload.get("articles", [])
+            if article.get("title") and article.get("url")
+        ]
+    }
+
+
 @api_router.get("/books/{book_id}", response_model=Book)
 async def get_book(book_id: str):
     doc = await db.books.find_one({"id": book_id}, {"_id": 0})
