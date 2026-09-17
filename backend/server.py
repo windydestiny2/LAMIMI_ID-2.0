@@ -6,6 +6,9 @@ import logging
 import math
 import base64
 import io
+import smtplib
+from email.message import EmailMessage
+from email.utils import formataddr
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone, timedelta, time
 from pathlib import Path
@@ -272,6 +275,71 @@ def evaluate_payment_verification(total: int, received: int) -> tuple[str, int]:
     return "Pembayaran Diterima", 0
 
 
+def send_payment_notification_email(order: "Order") -> None:
+    smtp_host = os.environ.get("SMTP_HOST", "").strip()
+    smtp_username = os.environ.get("SMTP_USERNAME", "").strip()
+    smtp_password = os.environ.get("SMTP_PASSWORD", "").strip()
+    admin_email = os.environ.get("ADMIN_NOTIFICATION_EMAIL", "bookslib01@gmail.com").strip()
+    if not smtp_host or not smtp_username or not smtp_password:
+        logger.warning("Payment email skipped: SMTP_HOST/SMTP_USERNAME/SMTP_PASSWORD is not configured")
+        return
+
+    recipients = [admin_email]
+    if order.customer_email.strip() and order.customer_email.strip().lower() != admin_email.lower():
+        recipients.append(order.customer_email.strip())
+    items_text = "\n".join(
+        f"- {item.title}{(' — ' + item.variant_label) if item.variant_label else ''} x{item.qty}: {rupiah(item.price * item.qty)}"
+        for item in order.items
+    )
+    subject = f"Pembayaran diterima: {order.order_number}"
+    body = (
+        "LAMIMI_ID menerima konfirmasi pembayaran baru.\n\n"
+        f"No. pesanan: {order.order_number}\n"
+        f"Customer: {order.customer_name}\n"
+        f"Email customer: {order.customer_email or '-'}\n"
+        f"WhatsApp: {order.customer_phone}\n"
+        f"Status pembayaran: {order.payment_status}\n"
+        f"Metode: {order.payment_method}\n"
+        f"Nominal terbaca: {rupiah(order.payment_received_amount)}\n"
+        f"Total pesanan: {rupiah(order.total)}\n"
+        f"Ongkir: {rupiah(order.shipping_cost)}\n"
+        f"Berat: {order.total_weight_grams} gram / ditagihkan {order.billable_weight_kg} kg\n"
+        f"\nItem:\n{items_text}\n"
+        f"\nAlamat: {order.address}, {order.city}, {order.province} {order.postal_code}\n"
+        f"Catatan: {order.notes or '-'}\n"
+    )
+    message = EmailMessage()
+    message["Subject"] = subject
+    message["From"] = formataddr((os.environ.get("SMTP_FROM_NAME", "LAMIMI_ID"), smtp_username))
+    message["To"] = ", ".join(recipients)
+    message.set_content(body)
+
+    if order.payment_proof.startswith("data:image"):
+        try:
+            header, encoded = order.payment_proof.split(",", 1)
+            content_type = header.split(";", 1)[0].split(":", 1)[1]
+            maintype, subtype = content_type.split("/", 1)
+            message.add_attachment(base64.b64decode(encoded), maintype=maintype, subtype=subtype, filename=f"bukti-{order.order_number}.{subtype}")
+        except (ValueError, base64.binascii.Error) as exc:
+            logger.warning("Payment proof attachment skipped: %r", exc)
+
+    port = int(os.environ.get("SMTP_PORT", "587"))
+    use_ssl = os.environ.get("SMTP_USE_SSL", "false").lower() == "true"
+    try:
+        if use_ssl:
+            with smtplib.SMTP_SSL(smtp_host, port, timeout=15) as smtp:
+                smtp.login(smtp_username, smtp_password)
+                smtp.send_message(message)
+        else:
+            with smtplib.SMTP(smtp_host, port, timeout=15) as smtp:
+                smtp.starttls()
+                smtp.login(smtp_username, smtp_password)
+                smtp.send_message(message)
+        logger.info("Payment notification email sent for %s to %s", order.order_number, ", ".join(recipients))
+    except (OSError, smtplib.SMTPException) as exc:
+        logger.exception("Payment notification email failed for %s: %r", order.order_number, exc)
+
+
 # ---------------- Models ----------------
 
 class VariantGroup(BaseModel):
@@ -296,6 +364,7 @@ class Book(BaseModel):
     price: int = 0
     description: str = ""
     cover_url: str = ""
+    image_urls: List[str] = []
     badge: str = ""
     featured: bool = False
     shopee_url: str = ""
@@ -317,6 +386,7 @@ class BookInput(BaseModel):
     price: int = 0
     description: str = ""
     cover_url: str = ""
+    image_urls: List[str] = []
     badge: str = ""
     featured: bool = False
     shopee_url: str = ""
@@ -1078,6 +1148,7 @@ async def confirm_payment(order_number: str, payload: ConfirmPaymentInput):
     doc["payment_status"] = payment_status
     doc["payment_shortage"] = payment_shortage
     order = Order(**doc)
+    await asyncio.to_thread(send_payment_notification_email, order)
     return OrderResponse(order=order, whatsapp_url=build_wa_url(order))
 
 
