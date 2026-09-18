@@ -590,6 +590,7 @@ class PaymentMethod(BaseModel):
     account_name: str = ""
     account_number: str = ""
     qr_image: str = ""
+    qr_payload: str = ""
     active: bool = True
 
 
@@ -598,6 +599,7 @@ class PaymentMethodInput(BaseModel):
     account_name: str = ""
     account_number: str = ""
     qr_image: str = ""
+    qr_payload: str = ""
     active: bool = True
 
 
@@ -735,6 +737,7 @@ class OrderResponse(BaseModel):
 class ReviewInput(BaseModel):
     order_number: str
     customer_email: str
+    book_id: str
     rating: int = Field(ge=1, le=5)
     comment: str = ""
 
@@ -1064,25 +1067,31 @@ async def list_book_reviews(book_id: str):
 
 @api_router.post("/reviews", response_model=Review)
 async def create_review(payload: ReviewInput):
-    order = await db.orders.find_one({"order_number": payload.order_number.strip().upper()}, {"_id": 0})
-    if not order or order.get("status") != "selesai":
-        raise HTTPException(status_code=400, detail="Review hanya dapat dibuat setelah pesanan selesai")
-    if order.get("customer_email", "").strip().lower() != payload.customer_email.strip().lower():
-        raise HTTPException(status_code=403, detail="Email tidak cocok dengan pesanan")
-    item = next((item for item in order.get("items", []) if item.get("book_id") == payload.book_id), None)
-    if not item:
-        raise HTTPException(status_code=400, detail="Buku tidak ada di pesanan ini")
-    if await db.reviews.find_one({"order_number": order["order_number"], "book_id": payload.book_id}):
-        raise HTTPException(status_code=409, detail="Review untuk buku ini sudah dikirim")
-    review = Review(
-        book_id=payload.book_id,
-        order_number=order["order_number"],
-        customer_name=order.get("customer_name", "Pelanggan"),
-        rating=payload.rating,
-        comment=payload.comment.strip(),
-    )
-    await db.reviews.insert_one(review.model_dump())
-    return review
+    try:
+        order = await db.orders.find_one({"order_number": payload.order_number.strip().upper()}, {"_id": 0})
+        if not order or order.get("status") != "selesai":
+            raise HTTPException(status_code=400, detail="Review hanya dapat dibuat setelah pesanan selesai")
+        if order.get("customer_email", "").strip().lower() != payload.customer_email.strip().lower():
+            raise HTTPException(status_code=403, detail="Email tidak cocok dengan pesanan")
+        item = next((item for item in order.get("items", []) if item.get("book_id") == payload.book_id), None)
+        if not item:
+            raise HTTPException(status_code=400, detail="Buku tidak ada di pesanan ini")
+        if await db.reviews.find_one({"order_number": order["order_number"], "book_id": payload.book_id}):
+            raise HTTPException(status_code=409, detail="Review untuk buku ini sudah dikirim")
+        review = Review(
+            book_id=payload.book_id,
+            order_number=order["order_number"],
+            customer_name=order.get("customer_name", "Pelanggan"),
+            rating=payload.rating,
+            comment=payload.comment.strip(),
+        )
+        await db.reviews.insert_one(review.model_dump())
+        return review
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.exception("Review creation failed for %s", payload.order_number)
+        raise HTTPException(status_code=500, detail="Review gagal disimpan. Silakan coba lagi.") from exc
 
 
 @api_router.get("/articles", response_model=List[Article])

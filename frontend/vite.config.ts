@@ -54,6 +54,7 @@ export default defineConfig(async () => {
         // recharts 3's Tooltip callback types reject the annotations agents write; src/lib/recharts.tsx adapts them.
         { find: /^recharts$/, replacement: path.resolve(__dirname, "./src/lib/recharts.tsx") },
         { find: "recharts-upstream", replacement: path.resolve(__dirname, "./node_modules/recharts") },
+        { find: /^qris-dinamis$/, replacement: path.resolve(__dirname, "../qris-dinamis/src/core/index.ts") },
       ],
     },
     // Every shipped dep, pre-bundled up front. Vite discovers deps lazily, so the first

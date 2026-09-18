@@ -15,6 +15,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
 import { filterAdminBookRowsByType } from "@/lib/adminBookFilters";
+import jsQR from "jsqr";
 
 interface BookForm {
   title: string; author: string; language: string; type: string; price: string;
@@ -50,7 +51,7 @@ export default function AdminDashboard() {
   const [vGroups, setVGroups] = useState<VGroup[]>([]);
   const [vRows, setVRows] = useState<VRow[]>([]);
   const [shipEdit, setShipEdit] = useState<Record<string, { cost: string; eta: string }>>({});
-  const [pmEdit, setPmEdit] = useState<Record<string, { account_name: string; account_number: string; qr_image: string; active: boolean }>>({});
+  const [pmEdit, setPmEdit] = useState<Record<string, { account_name: string; account_number: string; qr_image: string; qr_payload: string; active: boolean }>>({});
   const [proofView, setProofView] = useState<string | null>(null);
   const [voucherForm, setVoucherForm] = useState({ code: "", description: "", discount_type: "amount", discount_value: "0", active: true, valid_from: "", valid_until: "" });
   const [voucherEditingId, setVoucherEditingId] = useState<string | null>(null);
@@ -308,7 +309,7 @@ export default function AdminDashboard() {
 
   const savePayMethod = useMutation({
     mutationFn: (m: PaymentMethod) => {
-      const edit = pmEdit[m.id] ?? { account_name: m.account_name, account_number: m.account_number, qr_image: m.qr_image, active: m.active };
+      const edit = pmEdit[m.id] ?? { account_name: m.account_name, account_number: m.account_number, qr_image: m.qr_image, qr_payload: m.qr_payload ?? "", active: m.active };
       return aPut(`/admin/payment-methods/${m.id}`, { name: m.name, ...edit });
     },
     onSuccess: () => { toast.success("Metode pembayaran diperbarui"); refresh(); },
@@ -393,8 +394,21 @@ export default function AdminDashboard() {
     if (!file) return;
     if (file.size > 2 * 1024 * 1024) return toast.error("Ukuran gambar maksimal 2 MB.");
     const reader = new FileReader();
-    reader.onload = () =>
-      setPmEdit((s) => ({ ...s, [m.id]: { account_name: s[m.id]?.account_name ?? m.account_name, account_number: s[m.id]?.account_number ?? m.account_number, active: s[m.id]?.active ?? m.active, qr_image: String(reader.result) } }));
+    reader.onload = () => {
+      const imageUrl = String(reader.result);
+      const image = new Image();
+      image.onload = () => {
+        const canvas = document.createElement("canvas");
+        canvas.width = image.naturalWidth;
+        canvas.height = image.naturalHeight;
+        const context = canvas.getContext("2d");
+        const imageData = context ? (context.drawImage(image, 0, 0), context.getImageData(0, 0, canvas.width, canvas.height)) : null;
+        const decoded = imageData ? jsQR(imageData.data, canvas.width, canvas.height)?.data ?? "" : "";
+        setPmEdit((s) => ({ ...s, [m.id]: { account_name: s[m.id]?.account_name ?? m.account_name, account_number: s[m.id]?.account_number ?? m.account_number, active: s[m.id]?.active ?? m.active, qr_image: imageUrl, qr_payload: decoded || s[m.id]?.qr_payload || m.qr_payload || "" } }));
+        toast.success(decoded ? "Gambar QRIS tersimpan dan payload berhasil dibaca" : "Gambar QRIS tersimpan. Isi payload QRIS secara manual jika QR dinamis belum aktif.");
+      };
+      image.src = imageUrl;
+    };
     reader.readAsDataURL(file);
   };
 
@@ -745,7 +759,7 @@ export default function AdminDashboard() {
             <p className="max-w-lg text-sm text-[#635F59]">Rekening tujuan yang tampil ke customer saat checkout. QRIS: upload foto barcode agar muncul di halaman pembayaran.</p>
             <div className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
               {(payMethods.data ?? []).map((m) => {
-                const edit = pmEdit[m.id] ?? { account_name: m.account_name, account_number: m.account_number, qr_image: m.qr_image, active: m.active };
+                const edit = pmEdit[m.id] ?? { account_name: m.account_name, account_number: m.account_number, qr_image: m.qr_image, qr_payload: m.qr_payload ?? "", active: m.active };
                 return (
                   <div key={m.id} className="rounded-2xl border border-[#E8DFC8] bg-white p-5" data-testid={`payment-card-${m.id}`}>
                     <p className="flex items-center gap-2 font-heading font-semibold"><Landmark className="size-4 text-[#DD6B20]" /> {m.name}</p>
@@ -766,6 +780,16 @@ export default function AdminDashboard() {
                             <ImageUp className="size-4 text-[#DD6B20]" /> {edit.qr_image ? "Ganti gambar" : "Upload gambar QRIS"}
                             <input type="file" accept="image/*" className="hidden" onChange={onQrFile(m)} data-testid={`pm-qr-input-${m.id}`} />
                           </label>
+                          <div className="mt-3">
+                            <Label className="text-xs">Payload QRIS statis</Label>
+                            <Textarea
+                              value={edit.qr_payload}
+                              onChange={(e) => setPmEdit((s) => ({ ...s, [m.id]: { ...edit, qr_payload: e.target.value } }))}
+                              placeholder="Tempel QRIS string dari QRIS statis atau scan gambar QRIS"
+                              className="mt-1 min-h-24 font-mono text-[11px]"
+                            />
+                            <p className="mt-1 text-[11px] text-[#635F59]">Dipakai untuk membuat QRIS dinamis sesuai total pembayaran. Gambar QR saja belum cukup; payload teks harus dipindai atau ditempel.</p>
+                          </div>
                         </div>
                       )}
                       <label className="flex items-center gap-2 text-xs text-[#635F59]">

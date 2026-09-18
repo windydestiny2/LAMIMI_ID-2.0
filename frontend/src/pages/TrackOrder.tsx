@@ -41,7 +41,13 @@ export default function TrackOrder() {
     setReviewLoading(true);
     setReviewMessage("");
     try {
-      await apiPost<Review>("/reviews", { order_number: result.order.order_number, ...reviewForm });
+      await apiPost<Review>("/reviews", {
+        order_number: result.order.order_number,
+        customer_email: reviewForm.email,
+        book_id: reviewForm.book_id,
+        rating: reviewForm.rating,
+        comment: reviewForm.comment,
+      });
       setReviewMessage("Review terkirim dan menunggu moderasi admin. Terima kasih!");
     } catch (e) {
       setReviewMessage(apiErrorMessage(e));
@@ -120,7 +126,7 @@ export default function TrackOrder() {
                   <div className="mt-4 grid gap-3 sm:grid-cols-2">
                     <Input value={reviewForm.email} onChange={(e) => setReviewForm({ ...reviewForm, email: e.target.value })} placeholder="Email saat checkout" type="email" />
                     <select value={reviewForm.book_id} onChange={(e) => setReviewForm({ ...reviewForm, book_id: e.target.value })} className="h-10 rounded-md border border-[#E8DFC8] bg-white px-3 text-sm">
-                      {result.order.items.map((item) => <option key={item.book_id} value={item.book_id}>{item.title}{item.variant_label ? ` — ${item.variant_label}` : ""}</option>)}
+                      {result.order.items.map((item, index) => <option key={`${item.book_id}-${item.variant_id}-${index}`} value={item.book_id}>{item.title}{item.variant_label ? ` — ${item.variant_label}` : ""}{item.qty > 1 ? ` x${item.qty}` : ""}</option>)}
                     </select>
                   </div>
                   <div className="mt-3 flex items-center gap-1" aria-label="Rating">

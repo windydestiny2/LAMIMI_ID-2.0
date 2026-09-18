@@ -15,6 +15,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { billableWeightKg, hasPhysicalItems, validateCheckoutContact } from "@/lib/checkoutValidation";
+import { convertQRIS, validateQRIS } from "qris-dinamis";
+import QRCode from "qrcode";
 
 export default function Checkout() {
   const { id } = useParams();
@@ -42,6 +44,8 @@ export default function Checkout() {
   const [proof, setProof] = useState("");
   const [result, setResult] = useState<OrderResponse | null>(null);
   const [quoteLocation, setQuoteLocation] = useState({ city: "", province: "" });
+  const [dynamicQrImage, setDynamicQrImage] = useState("");
+  const [dynamicQrError, setDynamicQrError] = useState("");
 
   const items = useMemo(() => {
     if (isCart) return cartItems;
@@ -79,6 +83,27 @@ export default function Checkout() {
   const mapQuery = [form.address, form.city, form.province, form.postal].filter(Boolean).join(", ");
   const total = subtotal + shippingCost;
   const selectedMethod = methods?.find((m) => m.name === method);
+
+  useEffect(() => {
+    let cancelled = false;
+    setDynamicQrImage("");
+    setDynamicQrError("");
+    if (method !== "QRIS" || !result || !selectedMethod?.qr_payload) return;
+    try {
+      const validation = validateQRIS(selectedMethod.qr_payload.trim());
+      if (!validation.valid) {
+        setDynamicQrError(`Payload QRIS tidak valid: ${validation.errors.join(" ")}`);
+        return;
+      }
+      const dynamicPayload = convertQRIS(selectedMethod.qr_payload.trim(), { amount: result.order.total });
+      QRCode.toDataURL(dynamicPayload, { errorCorrectionLevel: "M", margin: 2, width: 320 })
+        .then((url) => { if (!cancelled) setDynamicQrImage(url); })
+        .catch(() => { if (!cancelled) setDynamicQrError("QRIS dinamis gagal dibuat. Gunakan metode pembayaran lain sementara."); });
+    } catch {
+      setDynamicQrError("Payload QRIS tidak dapat diproses. Periksa payload di Admin.");
+    }
+    return () => { cancelled = true; };
+  }, [method, result, selectedMethod]);
 
   const createOrder = useMutation({
     mutationFn: () =>
@@ -343,7 +368,7 @@ export default function Checkout() {
                     </div>
                     <p className="mt-1 text-sm text-[#635F59]">No. pesanan: <span className="font-mono font-bold text-[#1F1D1A]">{result.order.order_number}</span></p>
                     <p className="mt-4 rounded-2xl bg-[#FEEBC8] p-4 text-sm text-[#78350F]">
-                      Transfer tepat sebesar <span className="font-mono font-bold">{rupiah(result.order.total)}</span> ke salah satu rekening di bawah, lalu upload screenshot bukti pembayaranmu.
+                      Transfer tepat sebesar <span className="font-mono font-bold">{rupiah(result.order.total)}</span> ke rekening di bawah, lalu upload screenshot bukti pembayaranmu.
                     </p>
 
                     <div className="mt-5 space-y-2.5">
@@ -379,9 +404,13 @@ export default function Checkout() {
                             </span>
                           </div>
                           {m.name === "QRIS" && method === "QRIS" && (
-                            m.qr_image
-                              ? <img src={m.qr_image} alt="Barcode QRIS" className="mt-3 w-56 rounded-xl border border-[#E8DFC8] bg-white p-2" data-testid="qris-image" />
-                              : <p className="mt-3 rounded-xl bg-[#F5EDE0] p-3 text-xs text-[#635F59]">Barcode QRIS segera hadir — sementara gunakan metode lain ya.</p>
+                            dynamicQrImage
+                              ? <div className="mt-3"><img src={dynamicQrImage} alt={`QRIS dinamis ${rupiah(result.order.total)}`} className="w-56 rounded-xl border border-[#E8DFC8] bg-white p-2" data-testid="dynamic-qris-image" /><p className="mt-2 text-xs font-semibold text-[#9C4221]">QRIS dinamis untuk {rupiah(result.order.total)}</p></div>
+                              : dynamicQrError
+                                ? <p className="mt-3 rounded-xl bg-red-50 p-3 text-xs text-red-700">{dynamicQrError}</p>
+                                : m.qr_image
+                                  ? <div className="mt-3"><img src={m.qr_image} alt="Barcode QRIS" className="w-56 rounded-xl border border-[#E8DFC8] bg-white p-2" data-testid="qris-image" /><p className="mt-2 text-xs text-[#635F59]">QRIS dinamis belum tersedia. Pastikan payload QRIS di Admin sudah diisi.</p></div>
+                                  : <p className="mt-3 rounded-xl bg-[#F5EDE0] p-3 text-xs text-[#635F59]">Payload QRIS belum dikonfigurasi di Admin.</p>
                           )}
                         </button>
                       ))}

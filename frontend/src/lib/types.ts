@@ -131,6 +131,7 @@ export interface PaymentMethod {
   account_name: string;
   account_number: string;
   qr_image: string;
+  qr_payload?: string;
   active: boolean;
 }
 
