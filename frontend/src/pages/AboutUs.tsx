@@ -23,37 +23,37 @@ const REVIEW_FALLBACK_IMAGE = "https://images.unsplash.com/photo-1524995997946-a
 
 const REVIEW_PHOTOS = [
   {
-    name: "aszall_97",
+    name: "asz***_97",
     title: "Pembeli LAMIMI_ID",
     image: "",
     quote: "Gambar bagus. audio jernih, dapet bonus juga, terima kasih seller 👍🏻",
   },
   {
-    name: "ratna_enjia",
+    name: "ratna_*****",
     title: "Pembeli LAMIMI_ID",
     image: "",
     quote: "Semuanya bagus ya, no minus. Seller juga ramah. Kalau ada update pasti dikabari. Mantap, terima kasih seller 🙏🏻 Sukses selalu, ditunggu update selanjutnya ❤️",
   },
   {
-    name: "vina_saja",
+    name: "vina_****",
     title: "Pembeli Ebook",
     image: "",
     quote: "Terbaique, sepadan banget, belajar Mandarin bisa di mana saja dan kapan saja tanpa repot bawa buku fisik. Praktis, tersimpan di HP. Respon seller cepat, terpercaya, no tipu-tipu.",
   },
   {
-    name: "Linda.boentaram",
+    name: "Linda.*****ram",
     title: "Pembeli Buku Fisik",
     image: "",
     quote: "Cetakannya bagus banget dan jelas. Pengiriman juga gercep. Mantap... lain kali pesan lagi kalau sudah sampai HSK 2 🥰",
   },
   {
-    name: "chysn.v",
+    name: "chy**.v",
     title: "Pembeli LAMIMI_ID",
     image: "",
     quote: "Produknya lengkap, bagus banget.",
   },
   {
-    name: "allice_huang",
+    name: "allice_*****",
     title: "Pembeli Ebook",
     image: "",
     quote: "File PDF bagus dan rapi, sangat mudah menggunakannya. Tertata dengan urutan yang jelas. Sangat rekomendasi untuk beli di sini. Semoga tetap bagus dan terpercaya buat seller. Terima kasih.",

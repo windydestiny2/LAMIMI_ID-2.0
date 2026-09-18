@@ -59,6 +59,10 @@ export function clearCart() {
   save([]);
 }
 
+export function replaceCart(items: CartItem[]) {
+  save(items);
+}
+
 export function onCartChange(handler: () => void) {
   window.addEventListener(EVENT, handler);
   return () => window.removeEventListener(EVENT, handler);

@@ -20,3 +20,8 @@ export function toggleWishlist(id: string): boolean {
   window.dispatchEvent(new Event("lamimi-wishlist-change"));
   return next.includes(id);
 }
+
+export function replaceWishlist(ids: string[]) {
+  localStorage.setItem(KEY, JSON.stringify([...new Set(ids)]));
+  window.dispatchEvent(new Event("lamimi-wishlist-change"));
+}

@@ -792,6 +792,26 @@ class LoginInput(BaseModel):
     password: str
 
 
+class CustomerSignupInput(BaseModel):
+    name: str
+    email: str
+    password: str
+
+
+class CustomerProfileInput(BaseModel):
+    name: str = ""
+    phone: str = ""
+    address: str = ""
+    city: str = ""
+    province: str = ""
+    postal_code: str = ""
+
+
+class CustomerSyncInput(BaseModel):
+    wishlist: List[str] = []
+    cart: List[dict] = []
+
+
 class Stats(BaseModel):
     total_orders: int
     paid_orders: int
@@ -860,6 +880,20 @@ async def get_admin(request: Request):
     user = await db.users.find_one({"id": payload["sub"]}, {"_id": 0, "password_hash": 0})
     if not user or user.get("role") != "admin":
         raise HTTPException(status_code=401, detail="Akses khusus admin")
+    return user
+
+
+async def get_current_user(request: Request):
+    token = request.cookies.get("access_token")
+    if not token:
+        raise HTTPException(status_code=401, detail="Silakan masuk terlebih dahulu")
+    try:
+        payload = jwt.decode(token, jwt_secret(), algorithms=[JWT_ALGORITHM])
+    except jwt.PyJWTError:
+        raise HTTPException(status_code=401, detail="Sesi tidak valid atau kedaluwarsa")
+    user = await db.users.find_one({"id": payload["sub"]}, {"_id": 0, "password_hash": 0})
+    if not user or user.get("role") != "customer":
+        raise HTTPException(status_code=401, detail="Akun customer tidak ditemukan")
     return user
 
 
@@ -1545,6 +1579,60 @@ async def login(payload: LoginInput, request: Request, response: Response):
     token = create_access_token(user["id"], email)
     response.set_cookie(key="access_token", value=token, httponly=True, samesite="lax", max_age=43200, path="/")
     return {"user": {"id": user["id"], "email": email, "name": user.get("name", "Admin"), "role": user["role"]}, "token": token}
+
+
+@api_router.post("/auth/signup")
+async def customer_signup(payload: CustomerSignupInput, response: Response):
+    name = payload.name.strip()
+    email = payload.email.strip().lower()
+    if len(name) < 2:
+        raise HTTPException(status_code=400, detail="Nama minimal 2 karakter")
+    if "@" not in email or " " in email:
+        raise HTTPException(status_code=400, detail="Format email tidak valid")
+    if len(payload.password) < 8:
+        raise HTTPException(status_code=400, detail="Password minimal 8 karakter")
+    if await db.users.find_one({"email": email}):
+        raise HTTPException(status_code=409, detail="Email sudah terdaftar")
+    user = {
+        "id": str(uuid.uuid4()), "email": email, "name": name, "role": "customer",
+        "password_hash": hash_password(payload.password), "phone": "", "address": "",
+        "city": "", "province": "", "postal_code": "", "wishlist": [], "cart": [],
+        "created_at": datetime.now(timezone.utc),
+    }
+    await db.users.insert_one(user)
+    token = create_access_token(user["id"], email)
+    response.set_cookie(key="access_token", value=token, httponly=True, samesite="lax", max_age=43200, path="/")
+    return {"user": {k: user[k] for k in ["id", "email", "name", "role"]}}
+
+
+@api_router.post("/auth/customer-login")
+async def customer_login(payload: LoginInput, response: Response):
+    email = payload.email.strip().lower()
+    user = await db.users.find_one({"email": email, "role": "customer"})
+    if not user or not verify_password(payload.password, user["password_hash"]):
+        raise HTTPException(status_code=401, detail="Email atau password salah")
+    token = create_access_token(user["id"], email)
+    response.set_cookie(key="access_token", value=token, httponly=True, samesite="lax", max_age=43200, path="/")
+    return {"user": {k: user.get(k, "") for k in ["id", "email", "name", "role"]}}
+
+
+@api_router.get("/customer/me")
+async def customer_me(user=Depends(get_current_user)):
+    return {k: user.get(k, []) if k in {"wishlist", "cart"} else user.get(k, "") for k in ["id", "email", "name", "role", "phone", "address", "city", "province", "postal_code", "wishlist", "cart"]}
+
+
+@api_router.put("/customer/profile")
+async def customer_profile(payload: CustomerProfileInput, user=Depends(get_current_user)):
+    data = payload.model_dump()
+    data["name"] = data["name"].strip()
+    await db.users.update_one({"id": user["id"]}, {"$set": data})
+    return await customer_me(await db.users.find_one({"id": user["id"]}, {"_id": 0}))
+
+
+@api_router.put("/customer/sync")
+async def customer_sync(payload: CustomerSyncInput, user=Depends(get_current_user)):
+    await db.users.update_one({"id": user["id"]}, {"$set": {"wishlist": list(dict.fromkeys(payload.wishlist)), "cart": payload.cart}})
+    return {"ok": True}
 
 
 @api_router.get("/auth/me")

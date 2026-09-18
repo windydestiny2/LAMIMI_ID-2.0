@@ -15,6 +15,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { billableWeightKg, hasPhysicalItems, validateCheckoutContact } from "@/lib/checkoutValidation";
+import { getCustomerProfile } from "@/lib/customer";
 import { convertQRIS, validateQRIS } from "qris-dinamis";
 import QRCode from "qrcode";
 
@@ -36,6 +37,7 @@ export default function Checkout() {
     enabled: !isCart,
   });
   const { data: methods } = useQuery({ queryKey: ["payment-methods"], queryFn: () => apiGet<PaymentMethod[]>("/payment-methods") });
+  const { data: customerProfile } = useQuery({ queryKey: ["customer-me"], queryFn: getCustomerProfile, retry: false, staleTime: 60_000 });
 
   const [step, setStep] = useState<1 | 2 | 3>(1);
   const [form, setForm] = useState({ name: "", phone: "", email: "", address: "", city: "", province: "", postal: "", region: "", notes: "" });
@@ -46,6 +48,20 @@ export default function Checkout() {
   const [quoteLocation, setQuoteLocation] = useState({ city: "", province: "" });
   const [dynamicQrImage, setDynamicQrImage] = useState("");
   const [dynamicQrError, setDynamicQrError] = useState("");
+
+  useEffect(() => {
+    if (!customerProfile) return;
+    setForm((current) => current.name || current.email ? current : {
+      ...current,
+      name: customerProfile.name,
+      phone: customerProfile.phone,
+      email: customerProfile.email,
+      address: customerProfile.address,
+      city: customerProfile.city,
+      province: customerProfile.province,
+      postal: customerProfile.postal_code,
+    });
+  }, [customerProfile]);
 
   const items = useMemo(() => {
     if (isCart) return cartItems;

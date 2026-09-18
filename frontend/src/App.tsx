@@ -13,6 +13,8 @@ import AdminDashboard from "@/pages/AdminDashboard";
 import Articles from "@/pages/Articles";
 import ArticleDetail from "@/pages/ArticleDetail";
 import Wishlist from "@/pages/Wishlist";
+import CustomerAuth from "@/pages/CustomerAuth";
+import Account from "@/pages/Account";
 
 // One <Route> per page in src/pages; BrowserRouter already wraps this in main.tsx.
 export default function App() {
@@ -35,6 +37,9 @@ export default function App() {
         <Route path="/artikel" element={<Articles />} />
         <Route path="/artikel/:slug" element={<ArticleDetail />} />
         <Route path="/wishlist" element={<Wishlist />} />
+        <Route path="/masuk" element={<CustomerAuth mode="login" />} />
+        <Route path="/daftar" element={<CustomerAuth mode="signup" />} />
+        <Route path="/akun" element={<Account />} />
         <Route path="/admin/login" element={<AdminLogin />} />
         <Route path="/admin" element={<AdminDashboard />} />
         <Route path="*" element={<Navigate to="/" replace />} />
