@@ -14,7 +14,7 @@ import { Footer } from "@/components/Footer";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { billableWeightKg, validateCheckoutContact } from "@/lib/checkoutValidation";
+import { billableWeightKg, hasPhysicalItems, validateCheckoutContact } from "@/lib/checkoutValidation";
 
 export default function Checkout() {
   const { id } = useParams();
@@ -62,7 +62,7 @@ export default function Checkout() {
     }];
   }, [isCart, cartItems, book, variantId]);
 
-  const orderType = items[0]?.type ?? "digital";
+  const orderType = hasPhysicalItems(items) ? "fisik" : "digital";
   const isPhysical = orderType === "fisik";
   const subtotal = items.reduce((s, i) => s + i.price * i.qty, 0);
   const quantityTotal = items.reduce((s, i) => s + i.qty, 0);

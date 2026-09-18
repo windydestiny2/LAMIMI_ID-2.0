@@ -19,6 +19,8 @@ const SORT_OPTIONS = [
   { key: "oldest", label: "Oldest" },
   { key: "highest", label: "Highest Price" },
   { key: "lowest", label: "Lowest Price" },
+  { key: "most-sold", label: "Most Sold" },
+  { key: "least-sold", label: "Least Sold" },
 ];
 
 export default function Catalog({ kind }: { kind: "digital" | "fisik" }) {
@@ -81,6 +83,12 @@ export default function Catalog({ kind }: { kind: "digital" | "fisik" }) {
         break;
       case "lowest":
         sorted.sort((a, b) => a.price - b.price);
+        break;
+      case "most-sold":
+        sorted.sort((a, b) => (b.sold_count ?? 0) - (a.sold_count ?? 0));
+        break;
+      case "least-sold":
+        sorted.sort((a, b) => (a.sold_count ?? 0) - (b.sold_count ?? 0));
         break;
       case "newest":
       default:

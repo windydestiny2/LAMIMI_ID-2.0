@@ -1,7 +1,7 @@
 import { useState } from "react";
-import { MessageCircle, PackageSearch, Search } from "lucide-react";
-import { apiGet } from "@/lib/api";
-import type { OrderResponse } from "@/lib/types";
+import { MessageCircle, PackageSearch, Search, Star } from "lucide-react";
+import { apiGet, apiPost } from "@/lib/api";
+import type { OrderResponse, Review } from "@/lib/types";
 import { formatDate, ORDER_STATUS, rupiah } from "@/lib/format";
 import { apiErrorMessage } from "@/lib/adminApi";
 import { Navbar } from "@/components/Navbar";
@@ -14,6 +14,9 @@ export default function TrackOrder() {
   const [result, setResult] = useState<OrderResponse | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [reviewForm, setReviewForm] = useState({ email: "", book_id: "", rating: 5, comment: "" });
+  const [reviewMessage, setReviewMessage] = useState("");
+  const [reviewLoading, setReviewLoading] = useState(false);
 
   const search = async () => {
     if (!num.trim()) return;
@@ -21,7 +24,9 @@ export default function TrackOrder() {
     setError("");
     setResult(null);
     try {
-      setResult(await apiGet<OrderResponse>(`/orders/${num.trim()}`));
+      const orderResult = await apiGet<OrderResponse>(`/orders/${num.trim()}`);
+      setResult(orderResult);
+      setReviewForm((form) => ({ ...form, book_id: orderResult.order.items[0]?.book_id ?? "" }));
     } catch (e) {
       setError(apiErrorMessage(e) === "Terjadi kesalahan. Coba lagi ya." ? "Pesanan tidak ditemukan. Periksa kembali nomornya ya." : apiErrorMessage(e));
     } finally {
@@ -30,6 +35,20 @@ export default function TrackOrder() {
   };
 
   const status = result ? ORDER_STATUS[result.order.status] : null;
+
+  const submitReview = async () => {
+    if (!result || !reviewForm.email.trim() || !reviewForm.book_id) return;
+    setReviewLoading(true);
+    setReviewMessage("");
+    try {
+      await apiPost<Review>("/reviews", { order_number: result.order.order_number, ...reviewForm });
+      setReviewMessage("Review terkirim dan menunggu moderasi admin. Terima kasih!");
+    } catch (e) {
+      setReviewMessage(apiErrorMessage(e));
+    } finally {
+      setReviewLoading(false);
+    }
+  };
 
   return (
     <div className="min-h-screen bg-[#FAF7F2]">
@@ -94,6 +113,24 @@ export default function TrackOrder() {
                 <MessageCircle className="size-4" /> Hubungi Admin
                 <PackageSearch className="hidden" />
               </a>
+              {result.order.status === "selesai" && (
+                <div className="mt-6 border-t border-[#E8DFC8] pt-6">
+                  <h2 className="font-heading text-lg font-bold">Bagikan pengalaman belajarmu</h2>
+                  <p className="mt-1 text-sm text-[#635F59]">Review akan tampil setelah disetujui admin.</p>
+                  <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                    <Input value={reviewForm.email} onChange={(e) => setReviewForm({ ...reviewForm, email: e.target.value })} placeholder="Email saat checkout" type="email" />
+                    <select value={reviewForm.book_id} onChange={(e) => setReviewForm({ ...reviewForm, book_id: e.target.value })} className="h-10 rounded-md border border-[#E8DFC8] bg-white px-3 text-sm">
+                      {result.order.items.map((item) => <option key={item.book_id} value={item.book_id}>{item.title}{item.variant_label ? ` — ${item.variant_label}` : ""}</option>)}
+                    </select>
+                  </div>
+                  <div className="mt-3 flex items-center gap-1" aria-label="Rating">
+                    {[1, 2, 3, 4, 5].map((value) => <button key={value} type="button" onClick={() => setReviewForm({ ...reviewForm, rating: value })} aria-label={`${value} bintang`} className={value <= reviewForm.rating ? "text-amber-500" : "text-[#D6D3D1]"}><Star className="size-5 fill-current" /></button>)}
+                  </div>
+                  <textarea value={reviewForm.comment} onChange={(e) => setReviewForm({ ...reviewForm, comment: e.target.value })} placeholder="Tulis review singkat (opsional)" className="mt-3 min-h-24 w-full rounded-md border border-[#E8DFC8] bg-white p-3 text-sm" />
+                  <button onClick={submitReview} disabled={reviewLoading || !reviewForm.email.trim()} className="mt-3 rounded-full bg-[#DD6B20] px-5 py-2.5 text-sm font-semibold text-white disabled:opacity-50">{reviewLoading ? "Mengirim..." : "Kirim review"}</button>
+                  {reviewMessage && <p className="mt-3 text-sm text-[#635F59]">{reviewMessage}</p>}
+                </div>
+              )}
             </div>
           </Reveal>
         )}

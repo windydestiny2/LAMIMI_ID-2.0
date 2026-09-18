@@ -45,6 +45,14 @@ RAJAONGKIR_ORIGIN_CITY_ID="isi_id_kota_asal_gudang"
 RAJAONGKIR_ORIGIN_CITY_NAME="Kabupaten Bogor"
 RAJAONGKIR_ORIGIN_DESTINATION_SEARCH="Cibinong"
 RAJAONGKIR_COURIER="jne"
+NEWS_API_KEY="isi_api_key_newsapi"
+SMTP_HOST="smtp.gmail.com"
+SMTP_PORT="587"
+SMTP_USERNAME="bookslib01@gmail.com"
+SMTP_PASSWORD="qxpxidbghfgvuuld"
+SMTP_FROM_NAME="LAMIMI_ID"
+SMTP_USE_SSL="false"
+ADMIN_NOTIFICATION_EMAIL="bookslib01@gmail.com"
 ```
 
 Jika frontend menampilkan error `ECONNREFUSED` di Terminal, artinya backend belum jalan — perbaiki backend dulu, lalu refresh browser.

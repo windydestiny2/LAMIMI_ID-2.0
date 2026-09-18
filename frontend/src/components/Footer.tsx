@@ -1,5 +1,5 @@
 import { Link } from "react-router-dom";
-import { BookOpen, MessageCircle, Truck } from "lucide-react";
+import { BookOpen, LockKeyhole, MessageCircle, Truck } from "lucide-react";
 import { SiShopee } from "@icons-pack/react-simple-icons";
 import { SHOPEE_URL, WA_DISPLAY, WA_NUMBER } from "@/lib/types";
 
@@ -24,8 +24,18 @@ export function Footer() {
             <li><Link to="/etalase/digital" className="transition-colors hover:text-white">Etalase Ebook Digital</Link></li>
             <li><Link to="/etalase/fisik" className="transition-colors hover:text-white">Etalase Buku Fisik</Link></li>
             <li><Link to="/lacak" className="transition-colors hover:text-white">Lacak Pesanan</Link></li>
-            <li><Link to="/admin/login" data-testid="footer-admin-link" className="transition-colors hover:text-white">Masuk Admin</Link></li>
             <li><a href={SHOPEE_URL} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1.5 transition-colors hover:text-white"><SiShopee size={14} /> Toko Shopee Kami</a></li>
+            <li>
+              <Link
+                to="/admin/login"
+                data-testid="footer-admin-link"
+                aria-label="Akses admin"
+                title="Akses admin"
+                className="inline-flex rounded-full p-1 text-[#a39d94] transition-colors hover:bg-white/10 hover:text-white"
+              >
+                <LockKeyhole className="size-3.5" />
+              </Link>
+            </li>
           </ul>
         </div>
         <div>

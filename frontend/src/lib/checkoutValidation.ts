@@ -17,6 +17,10 @@ export function billableWeightKg(totalWeightGrams: number) {
   return Math.max(1, Math.ceil((Math.max(0, totalWeightGrams) - 300) / 1000));
 }
 
+export function hasPhysicalItems(items: Array<{ type: string }>) {
+  return items.some((item) => item.type === 'fisik');
+}
+
 export function validateCheckoutContact(form: { email: string; phone: string; isPhysical: boolean }) {
   if (!form.phone.trim() || !isValidWhatsAppPhone(form.phone)) {
     return 'Nomor WhatsApp harus berupa nomor WhatsApp yang benar.';

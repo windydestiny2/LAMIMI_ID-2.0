@@ -9,6 +9,7 @@ export interface Variant {
   selections: Record<string, string>;
   price: number;
   stock: number; // -1 = unlimited
+  download_url?: string;
 }
 
 export interface Book {
@@ -30,7 +31,9 @@ export interface Book {
   variant_groups: VariantGroup[];
   variants: Variant[];
   stock: number; // -1 = unlimited (ebook default)
+  download_url?: string;
   weight_grams: number; // physical books only
+  sold_count: number;
   created_at: string;
 }
 
@@ -92,6 +95,10 @@ export interface Order {
   payment_received_amount: number;
   payment_status: string;
   payment_shortage: number;
+  ebook_links?: { title: string; url: string; external?: boolean; expires_at: string }[];
+  ebook_email_status?: string;
+  ebook_email_error?: string;
+  ebook_email_sent_at?: string | null;
   created_at: string;
 }
 
@@ -137,6 +144,30 @@ export interface Voucher {
   valid_from: string;
   valid_until: string;
   created_at: string;
+}
+
+export interface Review {
+  id: string;
+  book_id: string;
+  order_number: string;
+  customer_name: string;
+  rating: number;
+  comment: string;
+  status: string;
+  created_at: string;
+}
+
+export interface Article {
+  id: string;
+  title: string;
+  slug: string;
+  excerpt: string;
+  content: string;
+  cover_url: string;
+  language: string;
+  published: boolean;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface AdminUser {

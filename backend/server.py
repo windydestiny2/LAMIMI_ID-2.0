@@ -7,6 +7,8 @@ import math
 import base64
 import io
 import smtplib
+import secrets
+import hashlib
 from email.message import EmailMessage
 from email.utils import formataddr
 from contextlib import asynccontextmanager
@@ -26,6 +28,7 @@ from fastapi import FastAPI, APIRouter, HTTPException, Request, Response, Depend
 from pydantic import BaseModel, Field
 from starlette.middleware.cors import CORSMiddleware
 from starlette.staticfiles import StaticFiles
+from starlette.responses import FileResponse
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -340,6 +343,152 @@ def send_payment_notification_email(order: "Order") -> None:
         logger.exception("Payment notification email failed for %s: %r", order.order_number, exc)
 
 
+def send_ebook_receipt_email(order: "Order", download_links: list[dict]) -> tuple[bool, str]:
+    smtp_host = os.environ.get("SMTP_HOST", "").strip()
+    smtp_username = os.environ.get("SMTP_USERNAME", "").strip()
+    smtp_password = os.environ.get("SMTP_PASSWORD", "").strip()
+    recipient = order.customer_email.strip()
+    if not recipient:
+        logger.warning("Ebook receipt skipped for %s: customer email is empty", order.order_number)
+        return False, "Email customer kosong"
+    if not smtp_host or not smtp_username or not smtp_password:
+        logger.warning("Ebook receipt skipped: SMTP_HOST/SMTP_USERNAME/SMTP_PASSWORD is not configured")
+        return False, "Konfigurasi SMTP belum lengkap"
+
+    app_url = os.environ.get("APP_URL", "").strip().rstrip("/")
+    items_text = "\n".join(
+        f"- {item['title']}{(' — ' + item['variant_label']) if item.get('variant_label') else ''} x{item['qty']}"
+        for item in download_links
+    )
+    links_text = "\n".join(
+        f"{item['title']}: {item['url'] if item.get('external') else app_url + item['url']}"
+        for item in download_links
+    )
+    body = (
+        f"Halo {order.customer_name},\n\n"
+        f"Pembayaran pesanan {order.order_number} sudah diverifikasi oleh admin.\n\n"
+        f"Receipt LAMIMI_ID\n{items_text}\n"
+        f"Total: {rupiah(order.total)}\n"
+        f"Metode pembayaran: {order.payment_method or '-'}\n\n"
+        f"Link akses ebook:\n{links_text}\n\n"
+        "Ketentuan\n"
+        "1. File ini hanya bisa diakses menggunakan 1 email yang kamu cantumkan.\n"
+        "2. Jika belum bisa diakses, mohon tunggu sebentar karena admin perlu verifikasi pembayaran kamu.\n"
+        "3. Link download dari server LAMIMI_ID memiliki masa berlaku 30 hari dan batas 3 kali download. Link Google Drive mengikuti pengaturan akses file di Google Drive. Jangan membagikan link ini.\n\n"
+        "Terima kasih sudah berbelanja di LAMIMI_ID."
+    )
+    message = EmailMessage()
+    message["Subject"] = f"Ebook dan receipt pesanan {order.order_number} - LAMIMI_ID"
+    message["From"] = formataddr((os.environ.get("SMTP_FROM_NAME", "LAMIMI_ID"), smtp_username))
+    message["To"] = recipient
+    message.set_content(body)
+    port = int(os.environ.get("SMTP_PORT", "587"))
+    use_ssl = os.environ.get("SMTP_USE_SSL", "false").lower() == "true"
+    try:
+        if use_ssl:
+            with smtplib.SMTP_SSL(smtp_host, port, timeout=15) as smtp:
+                smtp.login(smtp_username, smtp_password)
+                smtp.send_message(message)
+        else:
+            with smtplib.SMTP(smtp_host, port, timeout=15) as smtp:
+                smtp.starttls()
+                smtp.login(smtp_username, smtp_password)
+                smtp.send_message(message)
+        logger.info("Ebook receipt sent for %s", order.order_number)
+        return True, "Email ebook berhasil dikirim"
+    except (OSError, smtplib.SMTPException) as exc:
+        logger.exception("Ebook receipt failed for %s: %r", order.order_number, exc)
+        return False, f"SMTP gagal: {exc}"
+
+
+def send_suspicious_login_email(email: str, client_ip: str, count: int) -> None:
+    smtp_host = os.environ.get("SMTP_HOST", "").strip()
+    smtp_username = os.environ.get("SMTP_USERNAME", "").strip()
+    smtp_password = os.environ.get("SMTP_PASSWORD", "").strip()
+    recipient = os.environ.get("ADMIN_NOTIFICATION_EMAIL", smtp_username).strip()
+    if not smtp_host or not smtp_username or not smtp_password or not recipient:
+        return
+    message = EmailMessage()
+    message["Subject"] = "Peringatan login admin LAMIMI_ID"
+    message["From"] = formataddr((os.environ.get("SMTP_FROM_NAME", "LAMIMI_ID"), smtp_username))
+    message["To"] = recipient
+    message.set_content(
+        "Terdeteksi percobaan login admin yang gagal berulang.\n\n"
+        f"Email: {email}\nIP: {client_ip}\nJumlah percobaan: {count}\n"
+        "Akun dikunci sementara setelah batas percobaan tercapai."
+    )
+    port = int(os.environ.get("SMTP_PORT", "587"))
+    try:
+        with smtplib.SMTP(smtp_host, port, timeout=15) as smtp:
+            smtp.starttls()
+            smtp.login(smtp_username, smtp_password)
+            smtp.send_message(message)
+    except (OSError, smtplib.SMTPException):
+        logger.exception("Suspicious login notification failed for %s", email)
+
+
+def hash_download_token(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+async def issue_ebook_downloads(order: "Order") -> list[dict]:
+    if order.order_type != "digital":
+        return []
+    links: list[dict] = []
+    expires_at = datetime.now(timezone.utc) + timedelta(days=30)
+    for item in order.items:
+        book = await db.books.find_one({"id": item.book_id}, {"_id": 0})
+        if not book:
+            continue
+        variant = next((v for v in book.get("variants", []) if v.get("id") == item.variant_id), None) if item.variant_id else None
+        download_url = (variant or book).get("download_url", "")
+        if not download_url:
+            continue
+        download_url = str(download_url).strip()
+        is_external = download_url.startswith(("https://", "http://"))
+        if not is_external and not download_url.startswith("/uploads/"):
+            logger.warning("Skipping unsupported ebook URL for %s: %s", order.order_number, download_url)
+            continue
+        if is_external:
+            links.append({
+                "title": f"{item.title}{(' — ' + item.variant_label) if item.variant_label else ''}",
+                "qty": item.qty,
+                "url": download_url,
+                "external": True,
+                "expires_at": "sesuai pengaturan Google Drive",
+            })
+            continue
+        raw_token = secrets.token_urlsafe(32)
+        await db.download_tokens.insert_one({
+            "token_hash": hash_download_token(raw_token),
+            "order_number": order.order_number,
+            "customer_email": order.customer_email.strip().lower(),
+            "download_url": download_url,
+            "download_count": 0,
+            "max_downloads": 3,
+            "expires_at": expires_at,
+            "created_at": datetime.now(timezone.utc),
+        })
+        links.append({
+            "title": f"{item.title}{(' — ' + item.variant_label) if item.variant_label else ''}",
+            "qty": item.qty,
+            "url": f"/api/downloads/{raw_token}?email={quote(order.customer_email.strip())}",
+            "external": False,
+            "expires_at": expires_at.strftime("%d-%m-%Y %H:%M UTC"),
+        })
+    return links
+
+
+async def send_order_ebook_email(order: "Order", create_new_links: bool = True) -> tuple[bool, str]:
+    if order.order_type != "digital":
+        return False, "Pesanan bukan ebook digital"
+    download_links = await issue_ebook_downloads(order) if create_new_links else order.ebook_links
+    if not download_links:
+        return False, "Link ebook belum diisi pada produk atau variasinya"
+    sent, message = await asyncio.to_thread(send_ebook_receipt_email, order, download_links)
+    return sent, message
+
+
 # ---------------- Models ----------------
 
 class VariantGroup(BaseModel):
@@ -353,6 +502,7 @@ class Variant(BaseModel):
     selections: dict = {}
     price: int = 0
     stock: int = -1  # -1 = tidak dilacak / unlimited
+    download_url: str = ""
 
 
 class Book(BaseModel):
@@ -374,6 +524,7 @@ class Book(BaseModel):
     variant_groups: List[VariantGroup] = []
     variants: List[Variant] = []
     stock: int = -1  # -1 = unlimited (default untuk ebook)
+    download_url: str = ""
     weight_grams: int = 0  # only used for physical books
     sold_count: int = 0
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
@@ -397,6 +548,7 @@ class BookInput(BaseModel):
     variant_groups: List[VariantGroup] = []
     variants: List[Variant] = []
     stock: int = -1
+    download_url: str = ""
     weight_grams: int = 0
 
 
@@ -552,6 +704,10 @@ class Order(BaseModel):
     payment_received_amount: int = 0
     payment_status: str = "Pembayaran Kurang"
     payment_shortage: int = 0
+    ebook_links: List[dict] = []
+    ebook_email_status: str = "not_sent"
+    ebook_email_error: str = ""
+    ebook_email_sent_at: Optional[datetime] = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
@@ -576,6 +732,44 @@ class OrderResponse(BaseModel):
     whatsapp_url: str
 
 
+class ReviewInput(BaseModel):
+    order_number: str
+    customer_email: str
+    rating: int = Field(ge=1, le=5)
+    comment: str = ""
+
+
+class Review(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    book_id: str
+    order_number: str
+    customer_name: str
+    rating: int
+    comment: str = ""
+    status: str = "pending"
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class ReviewStatusUpdate(BaseModel):
+    status: str
+
+
+class ArticleInput(BaseModel):
+    title: str
+    slug: str = ""
+    excerpt: str = ""
+    content: str
+    cover_url: str = ""
+    language: str = "umum"
+    published: bool = False
+
+
+class Article(ArticleInput):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
 class ConfirmPaymentInput(BaseModel):
     method: str
     proof: str  # data URL of the payment screenshot
@@ -584,6 +778,10 @@ class ConfirmPaymentInput(BaseModel):
 
 class StatusUpdate(BaseModel):
     status: str
+
+
+class OrderEmailUpdate(BaseModel):
+    customer_email: str
 
 
 class LoginInput(BaseModel):
@@ -858,6 +1056,49 @@ async def get_book(book_id: str):
     return Book(**doc)
 
 
+@api_router.get("/books/{book_id}/reviews", response_model=List[Review])
+async def list_book_reviews(book_id: str):
+    docs = await db.reviews.find({"book_id": book_id, "status": "approved"}, {"_id": 0}).sort("created_at", -1).to_list(100)
+    return [Review(**doc) for doc in docs]
+
+
+@api_router.post("/reviews", response_model=Review)
+async def create_review(payload: ReviewInput):
+    order = await db.orders.find_one({"order_number": payload.order_number.strip().upper()}, {"_id": 0})
+    if not order or order.get("status") != "selesai":
+        raise HTTPException(status_code=400, detail="Review hanya dapat dibuat setelah pesanan selesai")
+    if order.get("customer_email", "").strip().lower() != payload.customer_email.strip().lower():
+        raise HTTPException(status_code=403, detail="Email tidak cocok dengan pesanan")
+    item = next((item for item in order.get("items", []) if item.get("book_id") == payload.book_id), None)
+    if not item:
+        raise HTTPException(status_code=400, detail="Buku tidak ada di pesanan ini")
+    if await db.reviews.find_one({"order_number": order["order_number"], "book_id": payload.book_id}):
+        raise HTTPException(status_code=409, detail="Review untuk buku ini sudah dikirim")
+    review = Review(
+        book_id=payload.book_id,
+        order_number=order["order_number"],
+        customer_name=order.get("customer_name", "Pelanggan"),
+        rating=payload.rating,
+        comment=payload.comment.strip(),
+    )
+    await db.reviews.insert_one(review.model_dump())
+    return review
+
+
+@api_router.get("/articles", response_model=List[Article])
+async def list_articles():
+    docs = await db.articles.find({"published": True}, {"_id": 0}).sort("updated_at", -1).to_list(200)
+    return [Article(**doc) for doc in docs]
+
+
+@api_router.get("/articles/{slug}", response_model=Article)
+async def get_article(slug: str):
+    doc = await db.articles.find_one({"slug": slug, "published": True}, {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Artikel tidak ditemukan")
+    return Article(**doc)
+
+
 @api_router.get("/shipping", response_model=List[ShippingRegion])
 async def list_shipping():
     docs = await db.shipping_regions.find({}, {"_id": 0}).to_list(50)
@@ -1074,6 +1315,8 @@ async def list_categories():
 
 @api_router.post("/orders", response_model=OrderResponse)
 async def create_order(payload: OrderCreate):
+    if payload.order_type == "digital" and ("@" not in payload.customer_email or not payload.customer_email.strip()):
+        raise HTTPException(status_code=400, detail="Email wajib diisi dengan benar untuk menerima ebook")
     wanted = payload.items or [OrderItemInput(book_id=i) for i in payload.book_ids]
     if not wanted:
         raise HTTPException(status_code=400, detail="Keranjang kosong")
@@ -1170,6 +1413,31 @@ async def get_order(order_number: str):
     return OrderResponse(order=order, whatsapp_url=build_wa_url(order))
 
 
+@api_router.get("/downloads/{token}")
+async def download_ebook(token: str, email: str):
+    record = await db.download_tokens.find_one({"token_hash": hash_download_token(token)}, {"_id": 0})
+    if not record:
+        raise HTTPException(status_code=404, detail="Link download tidak valid")
+    if email.strip().lower() != str(record.get("customer_email", "")).strip().lower():
+        raise HTTPException(status_code=403, detail="Email tidak cocok dengan pesanan")
+    expires_at = record.get("expires_at")
+    if expires_at and expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    if expires_at and expires_at < datetime.now(timezone.utc):
+        raise HTTPException(status_code=410, detail="Link download sudah kedaluwarsa")
+    if int(record.get("download_count", 0)) >= int(record.get("max_downloads", 3)):
+        raise HTTPException(status_code=429, detail="Batas download link sudah tercapai")
+    download_url = str(record.get("download_url", ""))
+    if not download_url.startswith("/uploads/"):
+        raise HTTPException(status_code=400, detail="File ebook belum dikonfigurasi dengan benar")
+    target = (ROOT_DIR / download_url.removeprefix("/uploads/")).resolve()
+    upload_root = (ROOT_DIR / "uploads").resolve()
+    if upload_root not in target.parents or not target.is_file():
+        raise HTTPException(status_code=404, detail="File ebook tidak ditemukan")
+    await db.download_tokens.update_one({"token_hash": record["token_hash"]}, {"$inc": {"download_count": 1}})
+    return FileResponse(target)
+
+
 @api_router.post("/orders/{order_number}/confirm-payment", response_model=OrderResponse)
 async def confirm_payment(order_number: str, payload: ConfirmPaymentInput):
     if not payload.method.strip():
@@ -1242,26 +1510,29 @@ async def admin_upload_cover(file: UploadFile = File(...), user=Depends(get_admi
 # ---------------- Auth routes ----------------
 
 @api_router.post("/auth/login")
-async def login(payload: LoginInput, response: Response):
+async def login(payload: LoginInput, request: Request, response: Response):
     email = payload.email.strip().lower()
-    identifier = f"admin:{email}"
-    attempts = await db.login_attempts.find_one({"identifier": identifier})
+    client_ip = request.client.host if request.client else "unknown"
+    identifiers = [f"admin-email:{email}", f"admin-ip:{client_ip}"]
     now = datetime.now(timezone.utc)
-    if attempts and attempts.get("locked_until"):
-        locked_until = attempts["locked_until"]
-        if locked_until.tzinfo is None:
-            locked_until = locked_until.replace(tzinfo=timezone.utc)
-        if locked_until > now:
-            raise HTTPException(status_code=429, detail="Terlalu banyak percobaan. Coba lagi 15 menit.")
+    attempts = await db.login_attempts.find_one({"identifier": {"$in": identifiers}})
+    locked_attempt = await db.login_attempts.find_one({"identifier": {"$in": identifiers}, "locked_until": {"$gt": now}})
+    if locked_attempt:
+        raise HTTPException(status_code=429, detail="Terlalu banyak percobaan. Coba lagi 15 menit.")
     user = await db.users.find_one({"email": email})
     if not user or not verify_password(payload.password, user["password_hash"]):
-        await db.login_attempts.update_one(
-            {"identifier": identifier},
-            {"$inc": {"count": 1}, "$set": {"locked_until": now + timedelta(minutes=15) if (attempts or {}).get("count", 0) + 1 >= 5 else None}},
-            upsert=True,
-        )
+        current_count = int((attempts or {}).get("count", 0)) + 1
+        lock_until = now + timedelta(minutes=15) if current_count >= 5 else None
+        for identifier in identifiers:
+            await db.login_attempts.update_one(
+                {"identifier": identifier},
+                {"$inc": {"count": 1}, "$set": {"locked_until": lock_until, "email": email, "client_ip": client_ip, "updated_at": now}},
+                upsert=True,
+            )
+        if current_count in {3, 5}:
+            await asyncio.to_thread(send_suspicious_login_email, email, client_ip, current_count)
         raise HTTPException(status_code=401, detail="Email atau kata sandi salah")
-    await db.login_attempts.delete_one({"identifier": identifier})
+    await db.login_attempts.delete_many({"identifier": {"$in": identifiers}})
     token = create_access_token(user["id"], email)
     response.set_cookie(key="access_token", value=token, httponly=True, samesite="lax", max_age=43200, path="/")
     return {"user": {"id": user["id"], "email": email, "name": user.get("name", "Admin"), "role": user["role"]}, "token": token}
@@ -1441,6 +1712,18 @@ async def admin_update_order(order_id: str, payload: StatusUpdate, user=Depends(
     if not doc_before:
         raise HTTPException(status_code=404, detail="Pesanan tidak ditemukan")
     await db.orders.update_one({"id": order_id}, {"$set": {"status": payload.status}})
+    if payload.status == "lunas" and doc_before.get("status") != "lunas":
+        approved_order = Order(**{**doc_before, "status": "lunas"})
+        download_links = await issue_ebook_downloads(approved_order)
+        approved_order.ebook_links = download_links
+        sent, message = await send_order_ebook_email(approved_order, create_new_links=False)
+        email_update = {
+            "ebook_links": download_links,
+            "ebook_email_status": "sent" if sent else "failed",
+            "ebook_email_error": "" if sent else message,
+            "ebook_email_sent_at": datetime.now(timezone.utc) if sent else None,
+        }
+        await db.orders.update_one({"id": order_id}, {"$set": email_update})
     # kembalikan stok jika pesanan dibatalkan
     if payload.status == "dibatalkan" and doc_before.get("status") != "dibatalkan":
         for item in doc_before.get("items", []):
@@ -1454,6 +1737,46 @@ async def admin_update_order(order_id: str, payload: StatusUpdate, user=Depends(
                     {"id": item["book_id"], "stock": {"$gte": 0}},
                     {"$inc": {"stock": 1}},
                 )
+    doc = await db.orders.find_one({"id": order_id}, {"_id": 0})
+    return Order(**doc)
+
+
+@api_router.post("/admin/orders/{order_id}/resend-ebook", response_model=Order)
+async def admin_resend_ebook(order_id: str, user=Depends(get_admin)):
+    doc = await db.orders.find_one({"id": order_id}, {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Pesanan tidak ditemukan")
+    order = Order(**doc)
+    if order.status != "lunas":
+        raise HTTPException(status_code=400, detail="Pesanan harus berstatus lunas")
+    try:
+        if not order.ebook_links:
+            links = await issue_ebook_downloads(order)
+            order.ebook_links = links
+        sent, message = await send_order_ebook_email(order, create_new_links=False)
+    except Exception as exc:
+        logger.exception("Ebook resend failed before SMTP for %s", order.order_number)
+        sent, message = False, f"Gagal menyiapkan email: {exc}"
+    await db.orders.update_one({"id": order_id}, {"$set": {
+        "ebook_links": order.ebook_links,
+        "ebook_email_status": "sent" if sent else "failed",
+        "ebook_email_error": "" if sent else message,
+        "ebook_email_sent_at": datetime.now(timezone.utc) if sent else None,
+    }})
+    if not sent:
+        raise HTTPException(status_code=502, detail=message)
+    doc = await db.orders.find_one({"id": order_id}, {"_id": 0})
+    return Order(**doc)
+
+
+@api_router.patch("/admin/orders/{order_id}/email", response_model=Order)
+async def admin_update_order_email(order_id: str, payload: OrderEmailUpdate, user=Depends(get_admin)):
+    email = payload.customer_email.strip().lower()
+    if "@" not in email or " " in email:
+        raise HTTPException(status_code=400, detail="Format email tidak valid")
+    result = await db.orders.update_one({"id": order_id}, {"$set": {"customer_email": email, "ebook_email_status": "not_sent", "ebook_email_error": ""}})
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Pesanan tidak ditemukan")
     doc = await db.orders.find_one({"id": order_id}, {"_id": 0})
     return Order(**doc)
 
@@ -1480,6 +1803,63 @@ async def admin_update_book(book_id: str, payload: BookInput, user=Depends(get_a
         raise HTTPException(status_code=404, detail="Buku tidak ditemukan")
     doc = await db.books.find_one({"id": book_id}, {"_id": 0})
     return Book(**doc)
+
+
+@api_router.get("/admin/reviews", response_model=List[Review])
+async def admin_list_reviews(user=Depends(get_admin)):
+    docs = await db.reviews.find({}, {"_id": 0}).sort("created_at", -1).to_list(500)
+    return [Review(**doc) for doc in docs]
+
+
+@api_router.patch("/admin/reviews/{review_id}", response_model=Review)
+async def admin_update_review(review_id: str, payload: ReviewStatusUpdate, user=Depends(get_admin)):
+    if payload.status not in {"pending", "approved", "rejected"}:
+        raise HTTPException(status_code=400, detail="Status review tidak valid")
+    result = await db.reviews.update_one({"id": review_id}, {"$set": {"status": payload.status}})
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Review tidak ditemukan")
+    doc = await db.reviews.find_one({"id": review_id}, {"_id": 0})
+    return Review(**doc)
+
+
+@api_router.get("/admin/articles", response_model=List[Article])
+async def admin_list_articles(user=Depends(get_admin)):
+    docs = await db.articles.find({}, {"_id": 0}).sort("updated_at", -1).to_list(500)
+    return [Article(**doc) for doc in docs]
+
+
+@api_router.post("/admin/articles", response_model=Article)
+async def admin_create_article(payload: ArticleInput, user=Depends(get_admin)):
+    raw = payload.model_dump()
+    raw["slug"] = raw["slug"].strip().lower() or re.sub(r"[^a-z0-9]+", "-", raw["title"].lower()).strip("-")
+    if await db.articles.find_one({"slug": raw["slug"]}):
+        raise HTTPException(status_code=409, detail="Slug artikel sudah digunakan")
+    article = Article(**raw)
+    await db.articles.insert_one(article.model_dump())
+    return article
+
+
+@api_router.put("/admin/articles/{article_id}", response_model=Article)
+async def admin_update_article(article_id: str, payload: ArticleInput, user=Depends(get_admin)):
+    raw = payload.model_dump()
+    raw["slug"] = raw["slug"].strip().lower() or re.sub(r"[^a-z0-9]+", "-", raw["title"].lower()).strip("-")
+    raw["updated_at"] = datetime.now(timezone.utc)
+    existing = await db.articles.find_one({"id": article_id}, {"_id": 0})
+    if not existing:
+        raise HTTPException(status_code=404, detail="Artikel tidak ditemukan")
+    if await db.articles.find_one({"slug": raw["slug"], "id": {"$ne": article_id}}):
+        raise HTTPException(status_code=409, detail="Slug artikel sudah digunakan")
+    await db.articles.update_one({"id": article_id}, {"$set": raw})
+    doc = await db.articles.find_one({"id": article_id}, {"_id": 0})
+    return Article(**doc)
+
+
+@api_router.delete("/admin/articles/{article_id}")
+async def admin_delete_article(article_id: str, user=Depends(get_admin)):
+    result = await db.articles.delete_one({"id": article_id})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Artikel tidak ditemukan")
+    return {"ok": True}
 
 
 @api_router.delete("/admin/books/{book_id}")

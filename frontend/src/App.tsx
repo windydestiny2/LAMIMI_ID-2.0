@@ -10,6 +10,9 @@ import TrackOrder from "@/pages/TrackOrder";
 import AboutUs from "@/pages/AboutUs";
 import AdminLogin from "@/pages/AdminLogin";
 import AdminDashboard from "@/pages/AdminDashboard";
+import Articles from "@/pages/Articles";
+import ArticleDetail from "@/pages/ArticleDetail";
+import Wishlist from "@/pages/Wishlist";
 
 // One <Route> per page in src/pages; BrowserRouter already wraps this in main.tsx.
 export default function App() {
@@ -29,6 +32,9 @@ export default function App() {
         <Route path="/checkout/:id" element={<Checkout />} />
         <Route path="/lacak" element={<TrackOrder />} />
         <Route path="/about-us" element={<AboutUs />} />
+        <Route path="/artikel" element={<Articles />} />
+        <Route path="/artikel/:slug" element={<ArticleDetail />} />
+        <Route path="/wishlist" element={<Wishlist />} />
         <Route path="/admin/login" element={<AdminLogin />} />
         <Route path="/admin" element={<AdminDashboard />} />
         <Route path="*" element={<Navigate to="/" replace />} />

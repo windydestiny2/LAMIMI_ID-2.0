@@ -1,12 +1,14 @@
 import { Link } from "react-router-dom";
 import { motion } from "motion/react";
-import { ShoppingCart, Store, Truck, Zap } from "lucide-react";
+import { Heart, ShoppingCart, Store, Truck, Zap } from "lucide-react";
 import { toast } from "sonner";
 import { SiShopee, SiTiktok } from "@icons-pack/react-simple-icons";
 import type { Book, Variant } from "@/lib/types";
 import { LANGUAGE_META, SHOPEE_URL, WA_NUMBER } from "@/lib/types";
 import { rupiah } from "@/lib/format";
 import { addToCart } from "@/lib/cart";
+import { isWishlisted, toggleWishlist } from "@/lib/wishlist";
+import { useEffect, useState } from "react";
 
 export function marketplaceLinks(book: Book) {
   const wa = `https://wa.me/${WA_NUMBER}?text=${encodeURIComponent(`Halo Admin LAMIMI_ID, apakah buku "${book.title}" tersedia di marketplace?`)}`;
@@ -43,6 +45,13 @@ export function handleAddToCart(book: Book, variant?: Variant) {
 }
 
 export function BookCard({ book }: { book: Book }) {
+  const [wishlisted, setWishlisted] = useState(false);
+  useEffect(() => {
+    const sync = () => setWishlisted(isWishlisted(book.id));
+    sync();
+    window.addEventListener("lamimi-wishlist-change", sync);
+    return () => window.removeEventListener("lamimi-wishlist-change", sync);
+  }, [book.id]);
   const meta = LANGUAGE_META[book.language];
   const isDigital = book.type === "digital";
   const hasVariants = book.variants.length > 0;
@@ -85,6 +94,14 @@ export function BookCard({ book }: { book: Book }) {
           <ShoppingCart className="size-4" />
         </button>
       )}
+      <button
+        type="button"
+        onClick={() => setWishlisted(toggleWishlist(book.id))}
+        aria-label={wishlisted ? "Hapus dari wishlist" : "Simpan ke wishlist"}
+        className="absolute right-5 top-14 flex size-8 items-center justify-center rounded-full bg-white/90 text-[#C05621] shadow backdrop-blur transition-colors hover:bg-[#FEEBC8]"
+      >
+        <Heart className={`size-4 ${wishlisted ? "fill-current" : ""}`} />
+      </button>
       <div className="flex flex-1 flex-col px-1 pb-1 pt-3">
         <h3 className="font-heading text-base font-semibold leading-snug">
           <Link to={`/buku/${book.id}`} className="transition-colors hover:text-[#C05621]">{book.title}</Link>
@@ -93,6 +110,7 @@ export function BookCard({ book }: { book: Book }) {
         <p className="mt-2 font-mono text-lg font-bold tracking-tight text-[#9C4221]" data-testid={`book-price-${book.id}`}>
           {hasVariants ? `Mulai ${rupiah(minPrice)}` : rupiah(book.price)}
         </p>
+        <p className="mt-1 text-xs font-medium text-[#635F59]" data-testid={`book-sold-${book.id}`}>Terjual {book.sold_count ?? 0}</p>
         {!isDigital && <p className="mt-1 text-xs text-[#635F59]">Berat {(book.weight_grams ?? 0).toLocaleString("id-ID")} gram</p>}
         <div className="mt-3 flex-1" />
         <Link

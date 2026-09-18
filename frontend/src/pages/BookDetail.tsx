@@ -4,7 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { ArrowLeft, ArrowRight, ShoppingCart, Truck, Zap } from "lucide-react";
 import { toast } from "sonner";
 import { apiGet } from "@/lib/api";
-import type { Book } from "@/lib/types";
+import type { Book, Review } from "@/lib/types";
 import { LANGUAGE_META } from "@/lib/types";
 import { rupiah } from "@/lib/format";
 import { Navbar } from "@/components/Navbar";
@@ -23,6 +23,11 @@ export default function BookDetail() {
     queryKey: ["books", "related", book?.language, book?.type],
     queryFn: () => apiGet<Book[]>(`/books?type=${book?.type}&language=${book?.language}`),
     enabled: !!book,
+  });
+  const { data: reviews } = useQuery({
+    queryKey: ["book-reviews", id],
+    queryFn: () => apiGet<Review[]>(`/books/${id}/reviews`),
+    enabled: !!id,
   });
   const [sel, setSel] = useState<Record<string, string>>({});
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
@@ -184,6 +189,7 @@ export default function BookDetail() {
                       : `Mulai ${rupiah(Math.min(...book.variants.map((v) => v.price)))}`
                     : rupiah(book.price)}
                 </p>
+                  <p className="mt-2 text-sm font-medium text-[#635F59]" data-testid="detail-sold-count">Terjual {book.sold_count ?? 0}</p>
                 {hasVariants && allSelected && activeVariant && (
                   <p className="mt-1 text-xs text-[#635F59]" data-testid="detail-variant-label">Variasi: {activeVariant.label}</p>
                 )}
@@ -236,6 +242,21 @@ export default function BookDetail() {
               </Reveal>
             </div>
           </div>
+        )}
+
+        {book && (
+          <section className="mt-16 border-t border-[#E8DFC8] pt-10" aria-labelledby="reviews-heading">
+            <h2 id="reviews-heading" className="font-heading text-2xl font-bold">Review pembaca</h2>
+            <div className="mt-5 grid gap-3 md:grid-cols-2">
+              {(reviews ?? []).map((review) => (
+                <article key={review.id} className="rounded-2xl border border-[#E8DFC8] bg-white p-5">
+                  <div className="flex items-center justify-between gap-3"><p className="font-semibold">{review.customer_name}</p><span className="text-amber-500">{"★".repeat(review.rating)}</span></div>
+                  {review.comment && <p className="mt-3 text-sm leading-relaxed text-[#635F59]">{review.comment}</p>}
+                </article>
+              ))}
+            </div>
+            {!reviews?.length && <p className="mt-4 text-sm text-[#635F59]">Belum ada review yang diterbitkan.</p>}
+          </section>
         )}
 
         {related && related.filter((b) => b.id !== book?.id).length > 0 && (

@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { BookOpen, BookPlus, Calendar, Eye, ImageUp, Landmark, Layers, Loader2, LogOut, MessageCircle, Package, Pencil, Plus, Search, Ticket, Trash2, Wallet, X } from "lucide-react";
 import { toast } from "sonner";
-import type { AdminStats, AdminUser, Book, Order, PaymentMethod, ShippingRegion, BookCategory, LanguageEntry, Voucher } from "@/lib/types";
+import type { AdminStats, AdminUser, Book, Order, PaymentMethod, ShippingRegion, BookCategory, LanguageEntry, Voucher, Review, Article } from "@/lib/types";
 import { LANGUAGE_META } from "@/lib/types";
 import { formatDate, ORDER_STATUS, rupiah } from "@/lib/format";
 import { aDelete, aGet, aPatch, aPost, aPut, apiErrorMessage, clearAdminToken, getAdminToken, uploadCover } from "@/lib/adminApi";
@@ -21,11 +21,13 @@ interface BookForm {
   description: string; cover_url: string; image_urls: string[]; badge: string; featured: boolean;
   shopee_url: string; tokopedia_url: string; tiktok_url: string; stock: string; weight_grams: string;
   categories: string[];
+  download_url: string;
 }
-const EMPTY_FORM: BookForm = { title: "", author: "", language: "mandarin", type: "digital", price: "", description: "", cover_url: "", image_urls: [], badge: "", featured: false, shopee_url: "", tokopedia_url: "", tiktok_url: "", stock: "-1", weight_grams: "0", categories: [] };
+const EMPTY_FORM: BookForm = { title: "", author: "", language: "mandarin", type: "digital", price: "", description: "", cover_url: "", image_urls: [], badge: "", featured: false, shopee_url: "", tokopedia_url: "", tiktok_url: "", stock: "-1", weight_grams: "0", categories: [], download_url: "" };
 
 interface VGroup { name: string; options: string }
-interface VRow { id: string; label: string; selections: Record<string, string>; price: string; stock: string }
+interface VRow { id: string; label: string; selections: Record<string, string>; price: string; stock: string; download_url: string }
+interface AdminOrdersResponse { items: Order[]; page: number; page_size: number; total: number; page_count: number }
 
 function parseGroups(groups: VGroup[]) {
   return groups
@@ -63,6 +65,9 @@ export default function AdminDashboard() {
   const [adminBookSort, setAdminBookSort] = useState("newest");
   const [adminOrderSearch, setAdminOrderSearch] = useState("");
   const [adminOrderDate, setAdminOrderDate] = useState("");
+  const [adminOrderPage, setAdminOrderPage] = useState(1);
+  const [articleForm, setArticleForm] = useState({ title: "", slug: "", excerpt: "", content: "", cover_url: "", language: "umum", published: false });
+  const [articleEditingId, setArticleEditingId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!getAdminToken()) {
@@ -80,8 +85,8 @@ export default function AdminDashboard() {
 
   const stats = useQuery({ queryKey: ["admin-stats"], queryFn: () => aGet<AdminStats>("/admin/stats"), enabled: !!me });
   const orders = useQuery({
-    queryKey: ["admin-orders", adminOrderSearch, adminOrderDate],
-    queryFn: () => aGet<Order[]>(`/admin/orders?${adminOrderSearch ? `search=${encodeURIComponent(adminOrderSearch)}&` : ""}${adminOrderDate ? `date=${encodeURIComponent(adminOrderDate)}` : ""}`),
+    queryKey: ["admin-orders", adminOrderSearch, adminOrderDate, adminOrderPage],
+    queryFn: () => aGet<AdminOrdersResponse>(`/admin/orders?page=${adminOrderPage}&page_size=15&${adminOrderSearch ? `search=${encodeURIComponent(adminOrderSearch)}&` : ""}${adminOrderDate ? `date=${encodeURIComponent(adminOrderDate)}` : ""}`),
     enabled: !!me,
   });
   const books = useQuery({ queryKey: ["admin-books"], queryFn: () => aGet<Book[]>("/books"), enabled: !!me });
@@ -90,6 +95,8 @@ export default function AdminDashboard() {
   const vouchers = useQuery({ queryKey: ["admin-vouchers"], queryFn: () => aGet<Voucher[]>("/admin/vouchers"), enabled: !!me });
   const languages = useQuery({ queryKey: ["admin-languages"], queryFn: () => aGet<LanguageEntry[]>("/admin/languages"), enabled: !!me });
   const categories = useQuery({ queryKey: ["admin-categories"], queryFn: () => aGet<BookCategory[]>("/admin/categories"), enabled: !!me });
+  const reviews = useQuery({ queryKey: ["admin-reviews"], queryFn: () => aGet<Review[]>("/admin/reviews"), enabled: !!me });
+  const articles = useQuery({ queryKey: ["admin-articles"], queryFn: () => aGet<Article[]>("/admin/articles"), enabled: !!me });
 
   const adminBookRows = useMemo(() => {
     const rows = filterAdminBookRowsByType(books.data ?? [], adminBookType).filter((b) => {
@@ -131,11 +138,32 @@ export default function AdminDashboard() {
     qc.invalidateQueries({ queryKey: ["admin-vouchers"] });
     qc.invalidateQueries({ queryKey: ["admin-languages"] });
     qc.invalidateQueries({ queryKey: ["admin-categories"] });
+    qc.invalidateQueries({ queryKey: ["admin-reviews"] });
+    qc.invalidateQueries({ queryKey: ["admin-articles"] });
   };
 
   const updateStatus = useMutation({
-    mutationFn: ({ id, status }: { id: string; status: string }) => aPatch(`/admin/orders/${id}`, { status }),
-    onSuccess: () => { toast.success("Status pesanan diperbarui"); refresh(); },
+    mutationFn: ({ id, status }: { id: string; status: string }) => aPatch<Order>(`/admin/orders/${id}`, { status }),
+    onSuccess: (order) => {
+      if (order.status === "lunas" && order.ebook_email_status === "failed") {
+        toast.error(`Status lunas, tetapi email gagal: ${order.ebook_email_error || "periksa konfigurasi SMTP"}`);
+      } else {
+        toast.success("Status pesanan diperbarui");
+      }
+      refresh();
+    },
+    onError: (e) => toast.error(apiErrorMessage(e)),
+  });
+
+  const resendEbook = useMutation({
+    mutationFn: (id: string) => aPost(`/admin/orders/${id}/resend-ebook`),
+    onSuccess: () => { toast.success("Email ebook berhasil dikirim ulang"); refresh(); },
+    onError: (e) => toast.error(apiErrorMessage(e)),
+  });
+
+  const updateOrderEmail = useMutation({
+    mutationFn: ({ id, email }: { id: string; email: string }) => aPatch<Order>(`/admin/orders/${id}/email`, { customer_email: email }),
+    onSuccess: () => { toast.success("Email customer disimpan"); refresh(); },
     onError: (e) => toast.error(apiErrorMessage(e)),
   });
 
@@ -150,7 +178,7 @@ export default function AdminDashboard() {
         image_urls: form.image_urls.filter(Boolean),
         categories: form.categories,
         variant_groups: groups,
-        variants: vRows.map((r) => ({ id: r.id, label: r.label, selections: r.selections, price: parseInt(r.price) || 0, stock: parseStock(r.stock) })),
+        variants: vRows.map((r) => ({ id: r.id, label: r.label, selections: r.selections, price: parseInt(r.price) || 0, stock: parseStock(r.stock), download_url: r.download_url })),
       };
       return editing ? aPut(`/admin/books/${editing.id}`, body) : aPost("/admin/books", body);
     },
@@ -169,6 +197,24 @@ export default function AdminDashboard() {
   const deleteBook = useMutation({
     mutationFn: (id: string) => aDelete(`/admin/books/${id}`),
     onSuccess: () => { toast.success("Buku dihapus"); refresh(); },
+    onError: (e) => toast.error(apiErrorMessage(e)),
+  });
+
+  const updateReview = useMutation({
+    mutationFn: ({ id, status }: { id: string; status: string }) => aPatch(`/admin/reviews/${id}`, { status }),
+    onSuccess: () => { toast.success("Moderasi review diperbarui"); refresh(); },
+    onError: (e) => toast.error(apiErrorMessage(e)),
+  });
+
+  const saveArticle = useMutation({
+    mutationFn: () => articleEditingId ? aPut(`/admin/articles/${articleEditingId}`, articleForm) : aPost("/admin/articles", articleForm),
+    onSuccess: () => { toast.success("Artikel tersimpan"); setArticleEditingId(null); setArticleForm({ title: "", slug: "", excerpt: "", content: "", cover_url: "", language: "umum", published: false }); refresh(); },
+    onError: (e) => toast.error(apiErrorMessage(e)),
+  });
+
+  const deleteArticle = useMutation({
+    mutationFn: (id: string) => aDelete(`/admin/articles/${id}`),
+    onSuccess: () => { toast.success("Artikel dihapus"); refresh(); },
     onError: (e) => toast.error(apiErrorMessage(e)),
   });
 
@@ -271,9 +317,9 @@ export default function AdminDashboard() {
 
   const openEdit = (b: Book) => {
     setEditing(b);
-    setForm({ title: b.title, author: b.author, language: b.language, type: b.type, price: String(b.price), description: b.description, cover_url: b.cover_url, image_urls: b.image_urls ?? [], badge: b.badge, featured: b.featured, shopee_url: b.shopee_url, tokopedia_url: b.tokopedia_url, tiktok_url: b.tiktok_url, stock: String(b.stock ?? -1), weight_grams: String(b.weight_grams ?? 0), categories: b.categories ?? [] });
+    setForm({ title: b.title, author: b.author, language: b.language, type: b.type, price: String(b.price), description: b.description, cover_url: b.cover_url, image_urls: b.image_urls ?? [], badge: b.badge, featured: b.featured, shopee_url: b.shopee_url, tokopedia_url: b.tokopedia_url, tiktok_url: b.tiktok_url, stock: String(b.stock ?? -1), weight_grams: String(b.weight_grams ?? 0), categories: b.categories ?? [], download_url: b.download_url ?? "" });
     setVGroups(b.variant_groups.map((g) => ({ name: g.name, options: g.options.join(", ") })));
-    setVRows(b.variants.map((v) => ({ id: v.id, label: v.label, selections: v.selections, price: String(v.price), stock: String(v.stock ?? -1) })));
+    setVRows(b.variants.map((v) => ({ id: v.id, label: v.label, selections: v.selections, price: String(v.price), stock: String(v.stock ?? -1), download_url: v.download_url ?? "" })));
     setDialogOpen(true);
   };
 
@@ -300,7 +346,7 @@ export default function AdminDashboard() {
       combos.map((c) => {
         const label = groups.map((g) => c[g.name]).join(" / ");
         const existing = prev.find((r) => r.label === label);
-        return { id: existing?.id ?? crypto.randomUUID(), label, selections: c, price: existing?.price ?? form.price ?? "0", stock: existing?.stock ?? "-1" };
+        return { id: existing?.id ?? crypto.randomUUID(), label, selections: c, price: existing?.price ?? form.price ?? "0", stock: existing?.stock ?? "-1", download_url: existing?.download_url ?? "" };
       }),
     );
     toast.success(`${combos.length} kombinasi variasi dibuat`);
@@ -402,6 +448,8 @@ export default function AdminDashboard() {
             <TabsTrigger value="promo" data-testid="tab-vouchers"><Ticket className="size-3.5" /> Promo</TabsTrigger>
             <TabsTrigger value="bahasa" data-testid="tab-languages">Bahasa</TabsTrigger>
             <TabsTrigger value="kategori" data-testid="tab-categories">Kategori</TabsTrigger>
+            <TabsTrigger value="review" data-testid="tab-reviews">Review</TabsTrigger>
+            <TabsTrigger value="artikel" data-testid="tab-articles">Artikel</TabsTrigger>
           </TabsList>
 
           <TabsContent value="pesanan" className="mt-6">
@@ -411,21 +459,38 @@ export default function AdminDashboard() {
                 <Input
                   type="search"
                   value={adminOrderSearch}
-                  onChange={(e) => setAdminOrderSearch(e.target.value)}
+                  onChange={(e) => {
+                    setAdminOrderSearch(e.target.value);
+                    setAdminOrderPage(1);
+                  }}
                   placeholder="Cari nama customer atau nomor pesanan"
                   className="pl-9"
                   data-testid="admin-order-search"
                 />
               </div>
-              <div className="relative">
+              <div className="relative flex shrink-0 items-center">
                 <Calendar className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-[#635F59]" />
                 <Input
                   type="date"
                   value={adminOrderDate}
-                  onChange={(e) => setAdminOrderDate(e.target.value)}
-                  className="pl-9"
+                  onChange={(e) => {
+                    setAdminOrderDate(e.target.value);
+                    setAdminOrderPage(1);
+                  }}
+                  className="w-[180px] pl-9"
                   data-testid="admin-order-date"
                 />
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAdminOrderDate("");
+                    setAdminOrderPage(1);
+                  }}
+                  className={`shrink-0 whitespace-nowrap rounded-full border px-4 py-2 text-xs font-semibold transition-colors ${adminOrderDate ? "border-[#E8DFC8] bg-white text-[#635F59] hover:border-[#DD6B20] hover:text-[#C05621]" : "border-[#1F1D1A] bg-[#1F1D1A] text-white"}`}
+                  data-testid="admin-order-all"
+                >
+                  All
+                </button>
               </div>
             </div>
             <div className="overflow-x-auto rounded-2xl border border-[#E8DFC8] bg-white">
@@ -436,14 +501,14 @@ export default function AdminDashboard() {
                   </tr>
                 </thead>
                 <tbody>
-                  {(orders.data ?? []).map((o) => (
+                  {(orders.data?.items ?? []).map((o) => (
                     <tr key={o.id} className="border-b border-[#E8DFC8]/60 last:border-0" data-testid={`order-row-${o.order_number}`}>
                       <td className="px-5 py-3.5">
                         <p className="font-mono font-bold">{o.order_number}</p>
                         <p className="text-xs text-[#635F59]">{formatDate(o.created_at)}</p>
                         {o.payment_method && <p className="mt-0.5 text-[11px] text-[#635F59]">{o.payment_method}</p>}
                       </td>
-                      <td className="px-5 py-3.5"><p className="font-medium">{o.customer_name}</p><p className="text-xs text-[#635F59]">{o.customer_phone}</p></td>
+                      <td className="px-5 py-3.5"><p className="font-medium">{o.customer_name}</p><p className="text-xs text-[#635F59]">{o.customer_email || "Email belum tersimpan"}</p><p className="text-xs text-[#635F59]">{o.customer_phone}</p>{o.order_type === "digital" && <button type="button" onClick={() => { const email = window.prompt("Email customer untuk receipt ebook:", o.customer_email); if (email?.trim()) updateOrderEmail.mutate({ id: o.id, email }); }} className="mt-1 text-[11px] font-semibold text-[#C05621] hover:underline">Ubah email</button>}</td>
                       <td className="max-w-60 px-5 py-3.5"><p className="line-clamp-2 text-xs">{o.items.map((i) => i.title + (i.variant_label ? ` (${i.variant_label})` : "")).join(", ")}</p></td>
                       <td className="px-5 py-3.5"><span className={`rounded-full px-2.5 py-1 text-[11px] font-semibold ${o.order_type === "digital" ? "bg-[#E0F2FE] text-[#0369A1]" : "bg-[#FEEBC8] text-[#9A3412]"}`}>{o.order_type === "digital" ? "Ebook" : "Fisik"}</span></td>
                       <td className="px-5 py-3.5 font-mono font-bold text-[#9C4221]">{rupiah(o.total)}</td>
@@ -462,6 +527,14 @@ export default function AdminDashboard() {
                           <span className={`rounded-full px-2.5 py-1 text-[11px] font-semibold ${o.payment_status === "Pembayaran Diterima" ? "bg-green-100 text-green-700" : "bg-amber-100 text-amber-700"}`}>{o.payment_status}</span>
                           {o.payment_shortage > 0 && <span className="text-[11px] font-semibold text-[#B91C1C]">Kurang: {rupiah(o.payment_shortage)}</span>}
                           {o.payment_received_amount > 0 && <span className="block text-[11px] text-[#635F59]">Dibayar: {rupiah(o.payment_received_amount)}</span>}
+                          {o.order_type === "digital" && o.status === "lunas" && (
+                            <div className="mt-2">
+                              <span className={`block text-[11px] ${o.ebook_email_status === "sent" ? "text-green-700" : "text-red-600"}`}>
+                                Email ebook: {o.ebook_email_status === "sent" ? "terkirim" : o.ebook_email_status === "failed" ? o.ebook_email_error || "gagal" : "belum dikirim"}
+                              </span>
+                              <button type="button" onClick={() => resendEbook.mutate(o.id)} disabled={resendEbook.isPending} className="mt-1 text-[11px] font-semibold text-[#C05621] hover:underline">Kirim ulang email</button>
+                            </div>
+                          )}
                         </div>
                       </td>
                       <td className="px-5 py-3.5">
@@ -478,10 +551,37 @@ export default function AdminDashboard() {
                       </td>
                     </tr>
                   ))}
-                  {orders.data?.length === 0 && <tr><td colSpan={7} className="px-5 py-10 text-center text-sm text-[#635F59]">Belum ada pesanan masuk.</td></tr>}
+                  {orders.data?.items.length === 0 && <tr><td colSpan={7} className="px-5 py-10 text-center text-sm text-[#635F59]">Belum ada pesanan masuk.</td></tr>}
                 </tbody>
               </table>
             </div>
+            {(orders.data?.page_count ?? 1) > 1 && (
+              <div className="mt-5 flex flex-wrap items-center justify-center gap-2" data-testid="admin-order-pagination">
+                <button
+                  onClick={() => setAdminOrderPage((page) => Math.max(1, page - 1))}
+                  disabled={adminOrderPage === 1}
+                  className="rounded-full border border-[#E8DFC8] bg-white px-4 py-2 text-xs font-semibold text-[#635F59] disabled:opacity-50"
+                >
+                  Prev
+                </button>
+                {Array.from({ length: orders.data?.page_count ?? 1 }, (_, index) => index + 1).map((page) => (
+                  <button
+                    key={page}
+                    onClick={() => setAdminOrderPage(page)}
+                    className={`min-w-10 rounded-full px-3 py-2 text-xs font-bold ${page === adminOrderPage ? "bg-[#1F1D1A] text-white" : "border border-[#E8DFC8] bg-white text-[#635F59]"}`}
+                  >
+                    {page}
+                  </button>
+                ))}
+                <button
+                  onClick={() => setAdminOrderPage((page) => Math.min(orders.data?.page_count ?? 1, page + 1))}
+                  disabled={adminOrderPage === (orders.data?.page_count ?? 1)}
+                  className="rounded-full border border-[#E8DFC8] bg-white px-4 py-2 text-xs font-semibold text-[#635F59] disabled:opacity-50"
+                >
+                  Next
+                </button>
+              </div>
+            )}
           </TabsContent>
 
           <TabsContent value="buku" className="mt-6">
@@ -837,6 +937,38 @@ export default function AdminDashboard() {
               </div>
             </div>
           </TabsContent>
+
+          <TabsContent value="review" className="mt-6">
+            <div className="space-y-3">
+              {(reviews.data ?? []).map((review) => (
+                <div key={review.id} className="rounded-2xl border border-[#E8DFC8] bg-white p-5">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div><p className="font-semibold">{review.customer_name} · {"★".repeat(review.rating)}</p><p className="text-xs text-[#635F59]">Pesanan {review.order_number} · Buku {review.book_id}</p></div>
+                    <Select value={review.status} onValueChange={(status) => updateReview.mutate({ id: review.id, status })}><SelectTrigger className="w-36"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="pending">Menunggu</SelectItem><SelectItem value="approved">Tampilkan</SelectItem><SelectItem value="rejected">Tolak</SelectItem></SelectContent></Select>
+                  </div>
+                  {review.comment && <p className="mt-3 text-sm leading-relaxed text-[#635F59]">{review.comment}</p>}
+                </div>
+              ))}
+              {!reviews.data?.length && <p className="rounded-2xl border border-dashed border-[#E8DFC8] bg-white p-8 text-center text-sm text-[#635F59]">Belum ada review.</p>}
+            </div>
+          </TabsContent>
+
+          <TabsContent value="artikel" className="mt-6">
+            <div className="rounded-2xl border border-[#E8DFC8] bg-white p-5">
+              <p className="mb-4 text-sm text-[#635F59]">Tulis artikel milik sendiri atau artikel yang sudah mendapat izin. Jangan menyalin penuh artikel dari website lain.</p>
+              <div className="grid gap-3 md:grid-cols-2">
+                <div><Label>Judul</Label><Input value={articleForm.title} onChange={(e) => setArticleForm({ ...articleForm, title: e.target.value })} className="mt-1" /></div>
+                <div><Label>Slug</Label><Input value={articleForm.slug} onChange={(e) => setArticleForm({ ...articleForm, slug: e.target.value })} placeholder="hsk-2-vs-hsk-3" className="mt-1" /></div>
+                <div><Label>Bahasa/topik</Label><Input value={articleForm.language} onChange={(e) => setArticleForm({ ...articleForm, language: e.target.value })} className="mt-1" /></div>
+                <div><Label>URL gambar cover (opsional)</Label><Input value={articleForm.cover_url} onChange={(e) => setArticleForm({ ...articleForm, cover_url: e.target.value })} className="mt-1" /></div>
+                <div className="md:col-span-2"><Label>Ringkasan</Label><Textarea value={articleForm.excerpt} onChange={(e) => setArticleForm({ ...articleForm, excerpt: e.target.value })} className="mt-1" /></div>
+                <div className="md:col-span-2"><Label>Isi artikel</Label><Textarea value={articleForm.content} onChange={(e) => setArticleForm({ ...articleForm, content: e.target.value })} className="mt-1 min-h-56" /></div>
+              </div>
+              <label className="mt-3 flex items-center gap-2 text-sm text-[#635F59]"><Checkbox checked={articleForm.published} onCheckedChange={(published) => setArticleForm({ ...articleForm, published: published === true })} /> Terbitkan ke halaman artikel</label>
+              <button onClick={() => saveArticle.mutate()} disabled={!articleForm.title.trim() || !articleForm.content.trim() || saveArticle.isPending} className="mt-4 rounded-full bg-[#DD6B20] px-5 py-2.5 text-sm font-semibold text-white disabled:opacity-50">{articleEditingId ? "Simpan perubahan" : "Terbitkan artikel"}</button>
+              <div className="mt-6 space-y-2">{(articles.data ?? []).map((article) => <div key={article.id} className="flex items-center justify-between rounded-xl border border-[#E8DFC8] p-3"><div><p className="font-semibold">{article.title}</p><p className="text-xs text-[#635F59]">{article.published ? "Terbit" : "Draft"} · /artikel/{article.slug}</p></div><div className="flex gap-2"><button onClick={() => { setArticleEditingId(article.id); setArticleForm({ title: article.title, slug: article.slug, excerpt: article.excerpt, content: article.content, cover_url: article.cover_url, language: article.language, published: article.published }); }} className="rounded-full border border-[#E8DFC8] p-2 text-[#635F59] hover:text-[#DD6B20]"><Pencil className="size-3.5" /></button><button onClick={() => window.confirm(`Hapus artikel "${article.title}"?`) && deleteArticle.mutate(article.id)} className="rounded-full border border-[#E8DFC8] p-2 text-[#635F59] hover:text-red-600"><Trash2 className="size-3.5" /></button></div></div>)}</div>
+            </div>
+          </TabsContent>
         </Tabs>
       </main>
 
@@ -848,11 +980,18 @@ export default function AdminDashboard() {
       </Dialog>
 
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-xl" data-testid="book-form-dialog">
+        <DialogContent className="flex h-[calc(100dvh-2rem)] max-h-[90vh] flex-col overflow-hidden sm:max-w-xl" data-testid="book-form-dialog">
           <DialogHeader>
             <DialogTitle>{editing ? "Edit Buku" : "Tambah Buku Baru"}</DialogTitle>
           </DialogHeader>
-          <div className="grid gap-3.5 sm:grid-cols-2">
+          <div
+            className="min-h-0 flex-1 touch-pan-y overflow-y-auto overscroll-contain pr-2"
+            onWheel={(event) => {
+              event.preventDefault();
+              event.currentTarget.scrollTop += event.deltaY;
+            }}
+          >
+            <div className="grid gap-3.5 sm:grid-cols-2">
             <div className="sm:col-span-2"><Label>Judul *</Label><Input data-testid="admin-book-title-input" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} className="mt-1.5" /></div>
             <div><Label>Penulis</Label><Input data-testid="admin-book-author-input" value={form.author} onChange={(e) => setForm({ ...form, author: e.target.value })} className="mt-1.5" /></div>
             <div><Label>Harga dasar (Rp) *</Label><Input data-testid="admin-book-price-input" type="number" value={form.price} onChange={(e) => setForm({ ...form, price: e.target.value })} className="mt-1.5" /></div>
@@ -998,11 +1137,28 @@ export default function AdminDashboard() {
                         className="w-24"
                         placeholder="-1"
                       />
+                      {form.type === "digital" && (
+                        <Input
+                          value={r.download_url ?? ""}
+                          onChange={(e) => setVRows((rs) => rs.map((x, i) => (i === ri ? { ...x, download_url: e.target.value } : x)))}
+                          className="w-52"
+                          placeholder="https://drive.google.com/..."
+                          aria-label={`URL ebook ${r.label}`}
+                        />
+                      )}
                     </div>
                   ))}
                 </div>
               )}
             </div>
+
+            {form.type === "digital" && vRows.length === 0 && (
+              <div className="sm:col-span-2">
+                <Label>Link ebook Google Drive</Label>
+                <Input value={form.download_url} onChange={(e) => setForm({ ...form, download_url: e.target.value })} placeholder="https://drive.google.com/..." className="mt-1.5" />
+                <p className="mt-1 text-xs text-[#635F59]">Tempel link Google Drive file ebook. Pastikan akses file diberikan ke email customer atau gunakan pengaturan berbagi yang sesuai. Link dikirim setelah status pesanan menjadi lunas.</p>
+              </div>
+            )}
 
             {form.type === "fisik" && (
               <>
@@ -1011,16 +1167,17 @@ export default function AdminDashboard() {
                 <div><Label>Link TikTok Shop</Label><Input data-testid="admin-book-tiktok-input" value={form.tiktok_url} onChange={(e) => setForm({ ...form, tiktok_url: e.target.value })} className="mt-1.5" /></div>
               </>
             )}
+            </div>
+            <button
+              onClick={() => (form.title.trim() && form.price ? saveBook.mutate() : toast.error("Judul dan harga wajib diisi."))}
+              disabled={saveBook.isPending}
+              data-testid="admin-book-save-button"
+              className="mt-2 inline-flex w-full items-center justify-center gap-2 rounded-full bg-[#DD6B20] py-3 text-sm font-semibold text-white hover:bg-[#C05621] disabled:opacity-60"
+            >
+              {saveBook.isPending ? <Loader2 className="size-4 animate-spin" /> : <BookOpen className="size-4" />}
+              {editing ? "Simpan Perubahan" : "Tambah Buku"}
+            </button>
           </div>
-          <button
-            onClick={() => (form.title.trim() && form.price ? saveBook.mutate() : toast.error("Judul dan harga wajib diisi."))}
-            disabled={saveBook.isPending}
-            data-testid="admin-book-save-button"
-            className="mt-2 inline-flex w-full items-center justify-center gap-2 rounded-full bg-[#DD6B20] py-3 text-sm font-semibold text-white hover:bg-[#C05621] disabled:opacity-60"
-          >
-            {saveBook.isPending ? <Loader2 className="size-4 animate-spin" /> : <BookOpen className="size-4" />}
-            {editing ? "Simpan Perubahan" : "Tambah Buku"}
-          </button>
         </DialogContent>
       </Dialog>
     </div>

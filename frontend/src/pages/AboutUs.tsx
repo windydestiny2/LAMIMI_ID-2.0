@@ -1,36 +1,73 @@
 import { Link } from "react-router-dom";
-import { ArrowRight, BookOpen, MessageCircle, Quote, Star, Truck } from "lucide-react";
+import { ArrowRight, BookOpen, ExternalLink, Loader2, MessageCircle, Quote, Star, Truck } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
 import { Navbar } from "@/components/Navbar";
 import { Footer } from "@/components/Footer";
+import { apiGet } from "@/lib/api";
+
+interface ChinaNewsArticle {
+  title: string;
+  description: string;
+  url: string;
+  url_to_image: string;
+  source: string;
+  published_at: string;
+}
+
+interface ChinaNewsResponse {
+  articles: ChinaNewsArticle[];
+}
+
+const NEWS_FALLBACK_IMAGE = "https://images.unsplash.com/photo-1504711434969-e33886168f5c?auto=format&fit=crop&w=1200&q=80";
+const REVIEW_FALLBACK_IMAGE = "https://images.unsplash.com/photo-1524995997946-a1c2e315a42f?auto=format&fit=crop&w=900&q=80";
 
 const REVIEW_PHOTOS = [
   {
-    name: "Sari",
-    title: "Pelajar Korea",
-    image: "https://images.unsplash.com/photo-1527980965255-d3b416303d12?auto=format&fit=crop&w=900&q=80",
-    quote: "Materi bukunya rapi dan langsung bisa dipakai belajar sambil jalan.",
+    name: "aszall_97",
+    title: "Pembeli LAMIMI_ID",
+    image: "",
+    quote: "Gambar bagus. audio jernih, dapet bonus juga, terima kasih seller 👍🏻",
   },
   {
-    name: "Raka",
-    title: "Course taker",
-    image: "https://images.unsplash.com/photo-1508214751196-bc0cdd6dad92?auto=format&fit=crop&w=900&q=80",
-    quote: "Ebook sampai cepat, pilihan bahasanya lengkap, dan pengiriman fisik cepat.",
+    name: "ratna_enjia",
+    title: "Pembeli LAMIMI_ID",
+    image: "",
+    quote: "Semuanya bagus ya, no minus. Seller juga ramah. Kalau ada update pasti dikabari. Mantap, terima kasih seller 🙏🏻 Sukses selalu, ditunggu update selanjutnya ❤️",
   },
   {
-    name: "Nadya",
-    title: "Pembaca Mandarain",
-    image: "https://images.unsplash.com/photo-1544005313-94ddf0286df2?auto=format&fit=crop&w=900&q=80",
-    quote: "Tema untuk belajar mandarin terasa ringan dan saya bukan hanya baca, tapi yakin ikut kursus.",
+    name: "vina_saja",
+    title: "Pembeli Ebook",
+    image: "",
+    quote: "Terbaique, sepadan banget, belajar Mandarin bisa di mana saja dan kapan saja tanpa repot bawa buku fisik. Praktis, tersimpan di HP. Respon seller cepat, terpercaya, no tipu-tipu.",
   },
   {
-    name: "Ayu",
-    title: "Pemula Bahasa Jepang",
-    image: "https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=900&q=80",
-    quote: "Saya suka karena semua buku di etalase tersedia dengan petunjuk yang rapi.",
+    name: "Linda.boentaram",
+    title: "Pembeli Buku Fisik",
+    image: "",
+    quote: "Cetakannya bagus banget dan jelas. Pengiriman juga gercep. Mantap... lain kali pesan lagi kalau sudah sampai HSK 2 🥰",
+  },
+  {
+    name: "chysn.v",
+    title: "Pembeli LAMIMI_ID",
+    image: "",
+    quote: "Produknya lengkap, bagus banget.",
+  },
+  {
+    name: "allice_huang",
+    title: "Pembeli Ebook",
+    image: "",
+    quote: "File PDF bagus dan rapi, sangat mudah menggunakannya. Tertata dengan urutan yang jelas. Sangat rekomendasi untuk beli di sini. Semoga tetap bagus dan terpercaya buat seller. Terima kasih.",
   },
 ];
 
 export default function AboutUs() {
+  const { data: news, isLoading: newsLoading, isError: newsError } = useQuery({
+    queryKey: ["china-news"],
+    queryFn: () => apiGet<ChinaNewsResponse>("/china-news"),
+    staleTime: 15 * 60 * 1000,
+    retry: false,
+  });
+
   return (
     <div className="min-h-screen bg-[#FAF7F2] text-[#1F1D1A]">
       <Navbar />
@@ -161,7 +198,15 @@ export default function AboutUs() {
               {[...REVIEW_PHOTOS, ...REVIEW_PHOTOS].map((review, i) => (
                 <article key={`${review.name}-${i}`} className="w-72 shrink-0 rounded-[2rem] border border-[#E8DFC8] bg-white p-4 shadow-sm">
                   <div className="overflow-hidden rounded-[1.5rem]">
-                    <img src={review.image} alt={review.name} className="aspect-[4/3] w-full object-cover" />
+                    <img
+                      src={review.image || REVIEW_FALLBACK_IMAGE}
+                      alt=""
+                      className="aspect-[4/3] w-full object-cover"
+                      loading="lazy"
+                      onError={(event) => {
+                        if (event.currentTarget.src !== REVIEW_FALLBACK_IMAGE) event.currentTarget.src = REVIEW_FALLBACK_IMAGE;
+                      }}
+                    />
                   </div>
                   <div className="mt-4">
                     <div className="flex items-center gap-1">
@@ -180,6 +225,53 @@ export default function AboutUs() {
               ))}
             </div>
           </div>
+        </div>
+      </section>
+
+      <section className="border-t border-[#E8DFC8] bg-[#F5EDE0] py-20">
+        <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
+          <div className="flex flex-wrap items-end justify-between gap-4">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[#DD6B20]">China Today</p>
+              <h2 className="mt-3 font-heading text-3xl font-semibold tracking-tight sm:text-4xl">Berita terbaru dari China</h2>
+              <p className="mt-3 max-w-2xl text-sm leading-relaxed text-[#635F59]">Ikuti kabar terbaru dari China sebagai teman belajar bahasa dan budaya.</p>
+            </div>
+            <span className="rounded-full border border-[#E8DFC8] bg-white px-4 py-2 text-xs font-semibold text-[#635F59]">Sumber: NewsAPI</span>
+          </div>
+
+          {newsLoading && (
+            <div className="mt-8 flex items-center gap-2 text-sm text-[#635F59]" data-testid="china-news-loading">
+              <Loader2 className="size-4 animate-spin text-[#DD6B20]" /> Memuat berita terbaru...
+            </div>
+          )}
+          {newsError && <p className="mt-8 text-sm text-[#635F59]" data-testid="china-news-error">Berita sedang belum tersedia. Silakan coba lagi nanti.</p>}
+          {!newsLoading && !newsError && news?.articles.length === 0 && <p className="mt-8 text-sm text-[#635F59]">Belum ada berita terbaru.</p>}
+
+          {news?.articles && news.articles.length > 0 && (
+            <div className="mt-8 grid gap-5 md:grid-cols-2 lg:grid-cols-3">
+              {news.articles.map((article) => (
+                <article key={article.url} className="overflow-hidden rounded-[1.5rem] border border-[#E8DFC8] bg-white shadow-sm">
+                  <img
+                    src={article.url_to_image || NEWS_FALLBACK_IMAGE}
+                    alt=""
+                    className="aspect-[16/9] w-full object-cover"
+                    loading="lazy"
+                    onError={(event) => {
+                      if (event.currentTarget.src !== NEWS_FALLBACK_IMAGE) event.currentTarget.src = NEWS_FALLBACK_IMAGE;
+                    }}
+                  />
+                  <div className="p-5">
+                    <p className="text-[11px] font-semibold uppercase tracking-wide text-[#DD6B20]">{article.source}</p>
+                    <h3 className="mt-2 line-clamp-3 font-heading text-lg font-semibold leading-snug">{article.title}</h3>
+                    {article.description && <p className="mt-3 line-clamp-3 text-sm leading-relaxed text-[#635F59]">{article.description}</p>}
+                    <a href={article.url} target="_blank" rel="noreferrer" className="mt-4 inline-flex items-center gap-1.5 text-sm font-semibold text-[#9C4221] hover:text-[#C05621]">
+                      Baca berita <ExternalLink className="size-4" />
+                    </a>
+                  </div>
+                </article>
+              ))}
+            </div>
+          )}
         </div>
       </section>
 

@@ -1,5 +1,5 @@
 import { Link, NavLink } from "react-router-dom";
-import { BookOpen, Menu, MessageCircle } from "lucide-react";
+import { BookOpen, Heart, Menu, MessageCircle } from "lucide-react";
 import { Sheet, SheetContent, SheetTrigger, SheetTitle } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
 import { CartDrawer } from "@/components/CartDrawer";
@@ -10,6 +10,8 @@ const LINKS = [
   { to: "/etalase/digital", label: "Ebook Digital" },
   { to: "/etalase/fisik", label: "Buku Fisik" },
   { to: "/lacak", label: "Lacak Pesanan" },
+  { to: "/artikel", label: "Artikel" },
+  { to: "/wishlist", label: "Wishlist" },
   { to: "/about-us", label: "About Us" },
 ];
 
@@ -43,6 +45,7 @@ export function Navbar() {
 
         <div className="flex items-center gap-2">
           <CartDrawer />
+          <Link to="/wishlist" aria-label="Buka wishlist" className="hidden rounded-full p-2 text-[#635F59] hover:bg-[#F5EDE0] hover:text-[#C05621] sm:block"><Heart className="size-5" /></Link>
           <a href={`https://wa.me/${WA_NUMBER}`} target="_blank" rel="noreferrer" data-testid="nav-whatsapp-button" className="hidden sm:block">
             <Button className="rounded-full bg-[#1F1D1A] text-white hover:bg-[#3a352f]">
               <MessageCircle className="size-4" /> Chat Admin
