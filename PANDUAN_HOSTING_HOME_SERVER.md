@@ -22,6 +22,48 @@ Siapkan home server yang stabil, sebaiknya memakai kabel LAN dan UPS, Ubuntu Ser
 
 Sebaiknya buat user deployment terpisah, bukan menjalankan aplikasi sebagai `root`.
 
+## Deployment dengan Docker Compose
+
+Project ini menyediakan `docker-compose.yml` dengan empat service: MongoDB,
+backend FastAPI, frontend React, dan Nginx sebagai pintu masuk. Di server:
+
+```bash
+git clone URL_REPOSITORY /opt/lamimi_project
+cd /opt/lamimi_project
+cp backend/.env.docker.example backend/.env
+```
+
+Edit `backend/.env` dan isi secret, kredensial admin, domain, serta API key.
+File tersebut jangan di-commit ke Git. Pastikan direktori upload tersedia:
+
+```bash
+mkdir -p backend/uploads/covers backend/uploads/ebooks
+docker compose build
+docker compose up -d
+docker compose ps
+```
+
+Aplikasi dapat diuji melalui `http://IP_SERVER:8000`. MongoDB dan backend tidak
+dipublikasikan ke host; hanya Nginx yang menerima koneksi dari luar. Data MongoDB
+disimpan di volume `mongo_data`, sedangkan file upload memakai
+`backend/uploads`, sehingga rebuild container tidak menghapus data.
+
+Untuk memindahkan database lama ke container, restore backup MongoDB ke service
+`mongo` setelah container aktif:
+
+```bash
+docker compose cp lamimi-backup.archive mongo:/tmp/lamimi-backup.archive
+docker compose exec mongo mongorestore \
+  --gzip --archive=/tmp/lamimi-backup.archive \
+  --nsFrom='NAMA_DATABASE_LAMA.*' \
+  --nsTo='lamimi_production.*'
+```
+
+Konfigurasi Nginx yang disediakan melayani HTTP pada port `8000`. Port `443` pada
+Compose sudah dicadangkan untuk HTTPS, tetapi blok `listen 443 ssl` dan path
+sertifikat harus ditambahkan setelah sertifikat Let's Encrypt tersedia. Jangan
+menganggap port `443` otomatis aman hanya karena sudah dipetakan di Compose.
+
 ## 2. Instalasi software
 
 ```bash
